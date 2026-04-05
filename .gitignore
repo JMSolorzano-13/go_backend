@@ -1,0 +1,19 @@
+# Compiled binary
+server
+go-backend
+*.exe
+
+# IDE
+.idea/
+.vscode/
+.cursor/
+
+# Environment
+.env
+!.env.example
+
+# OS
+.DS_Store
+
+# Logs
+*.log

@@ -1,0 +1,8 @@
+.env
+.env.*
+*.log
+logs/
+.git
+.idea
+.vscode
+.cursor

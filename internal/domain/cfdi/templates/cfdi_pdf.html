@@ -1,0 +1,208 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <title>CFDI</title>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Barlow:wght@300;400;500;600&display=swap');
+
+        html {
+            -webkit-print-color-adjust: exact;
+            font-size: 21px;
+        }
+        body {
+            font-family: 'Barlow', sans-serif;
+            font-weight: 300;
+            box-sizing: border-box;
+        }
+        table { border-collapse: collapse; }
+        th { font-weight: 500; padding: 2px 7px; }
+        td { padding: 2px 7px; }
+        b { font-weight: 500; }
+        .badge { border: 1px solid; padding: 3px 15px; line-height: none; display: inline-block; }
+        .badge-blue { border-color: rgb(145,202,255); color: rgb(9,88,217); background-color: rgb(230,244,255); }
+        .badge-green { border-color: rgb(183,245,143); color: rgb(56,158,13); background-color: rgb(246,255,257); }
+        .badge-red { border-color: rgb(255,163,158); color: rgb(207,19,34); background-color: rgb(255,241,240); }
+        .total-cell { color: white; background-color: rgb(39,78,117); font-weight: 500; font-size: 1.2rem; padding: 4px 8px; }
+        .section-divider { border-bottom: 1px solid #ddd; }
+        @media print {
+            html { color-adjust: exact; }
+        }
+    </style>
+</head>
+<body style="margin:20px; padding:0">
+    <!-- Status and type header -->
+    <table style="width:100%; margin-bottom:10px;">
+        <tr>
+            <td style="width:50%">
+                <span class="badge badge-blue">{{.TipoLabel}}</span>
+                {{if .Estatus}}
+                <span class="badge badge-green">Vigente</span>
+                {{else}}
+                <span class="badge badge-red">Cancelado {{.FechaCancelacion}}</span>
+                {{end}}
+            </td>
+            <td style="width:25%"><b>Serie:</b> {{.Serie}}</td>
+            <td style="width:25%" align="right"><b>Folio:</b> {{.Folio}}</td>
+        </tr>
+    </table>
+
+    <!-- Emisor / Receptor -->
+    <table style="width:100%; margin-bottom:10px;">
+        <tr style="vertical-align:top;">
+            <td style="width:48%">
+                <table style="width:100%">
+                    <tr><td style="font-weight:600;">Emisor:</td></tr>
+                    <tr><td>{{.NombreEmisor}}</td></tr>
+                    <tr><td>{{.RfcEmisor}}</td></tr>
+                    <tr><td><b>Lugar de Expedición:</b> {{.LugarExpedicion}}</td></tr>
+                    <tr><td><b>Régimen Fiscal:</b> {{.RegimenFiscalEmisor}}</td></tr>
+                </table>
+            </td>
+            <td style="width:4%"></td>
+            <td style="width:48%">
+                <table style="width:100%">
+                    <tr><td style="font-weight:600;">Receptor:</td></tr>
+                    <tr><td>{{.NombreReceptor}}</td></tr>
+                    <tr><td>{{.RfcReceptor}}</td></tr>
+                    <tr><td><b>Domicilio Fiscal:</b> {{.DomicilioFiscalReceptor}}</td></tr>
+                    <tr><td><b>Régimen Fiscal:</b> {{.RegimenFiscalReceptor}}</td></tr>
+                </table>
+            </td>
+        </tr>
+    </table>
+
+    <!-- Folio fiscal / Fecha -->
+    <table style="width:100%; margin-bottom:10px;" class="section-divider">
+        <tr align="left">
+            <th>Folio Fiscal:</th>
+            <th>Fecha / Hora de Emisión:</th>
+            <th>No. de Certificado Digital:</th>
+        </tr>
+        <tr>
+            <td>{{.UUID}}</td>
+            <td>{{.Fecha}}</td>
+            <td>{{.NoCertificado}}</td>
+        </tr>
+    </table>
+
+    <!-- Conceptos -->
+    <table style="width:100%; margin-bottom:5px;">
+        <tr align="left">
+            <th style="border-bottom:1px solid #ddd; width:50px;">Clave Producto</th>
+            <th style="border-bottom:1px solid #ddd; width:50px;">Cantidad</th>
+            <th style="border-bottom:1px solid #ddd; width:50px;">Clave Unidad</th>
+            <th style="border-bottom:1px solid #ddd;">Concepto(s)</th>
+            <th style="border-bottom:1px solid #ddd; width:85px;">Precio Unitario</th>
+            <th style="border-bottom:1px solid #ddd; width:100px;">Importe</th>
+        </tr>
+        {{range .Conceptos}}
+        <tr>
+            <td>{{.ClaveProdServ}}</td>
+            <td>{{.Cantidad}}</td>
+            <td>{{.ClaveUnidad}}</td>
+            <td>{{.Descripcion}}</td>
+            <td align="right">{{.ValorUnitario}}</td>
+            <td align="right">{{.Importe}}</td>
+        </tr>
+        {{end}}
+
+        <!-- Subtotals -->
+        {{if .SubTotal}}
+        <tr><td colspan="4"></td>
+            <td style="text-align:right; font-weight:600;" class="section-divider">Subtotal:</td>
+            <td align="right" class="section-divider">{{.SubTotal}}</td>
+        </tr>
+        {{end}}
+        {{if .Descuento}}
+        <tr><td colspan="4"></td>
+            <td style="text-align:right; font-weight:600;" class="section-divider">Descuento:</td>
+            <td align="right" class="section-divider">{{.Descuento}}</td>
+        </tr>
+        {{end}}
+        {{if .TrasladosIVA}}
+        <tr><td colspan="4"></td>
+            <td style="text-align:right; font-weight:600;" class="section-divider">Traslado IVA:</td>
+            <td align="right" class="section-divider">{{.TrasladosIVA}}</td>
+        </tr>
+        {{end}}
+        {{if .TrasladosISR}}
+        <tr><td colspan="4"></td>
+            <td style="text-align:right; font-weight:600;" class="section-divider">Traslado ISR:</td>
+            <td align="right" class="section-divider">{{.TrasladosISR}}</td>
+        </tr>
+        {{end}}
+        {{if .TrasladosIEPS}}
+        <tr><td colspan="4"></td>
+            <td style="text-align:right; font-weight:600;" class="section-divider">Traslado IEPS:</td>
+            <td align="right" class="section-divider">{{.TrasladosIEPS}}</td>
+        </tr>
+        {{end}}
+        {{if .RetencionesIVA}}
+        <tr><td colspan="4"></td>
+            <td style="text-align:right; font-weight:600;" class="section-divider">Retención IVA:</td>
+            <td align="right" class="section-divider">{{.RetencionesIVA}}</td>
+        </tr>
+        {{end}}
+        {{if .RetencionesISR}}
+        <tr><td colspan="4"></td>
+            <td style="text-align:right; font-weight:600;" class="section-divider">Retención ISR:</td>
+            <td align="right" class="section-divider">{{.RetencionesISR}}</td>
+        </tr>
+        {{end}}
+        {{if .RetencionesIEPS}}
+        <tr><td colspan="4"></td>
+            <td style="text-align:right; font-weight:600;" class="section-divider">Retención IEPS:</td>
+            <td align="right" class="section-divider">{{.RetencionesIEPS}}</td>
+        </tr>
+        {{end}}
+        <tr>
+            <td colspan="3" class="section-divider">Moneda: {{.Moneda}} {{.TipoCambioLabel}}</td>
+            <td class="section-divider"></td>
+            <td class="total-cell">Total:</td>
+            <td class="total-cell" align="right">{{.Total}}</td>
+        </tr>
+    </table>
+
+    <!-- Pago info -->
+    <table style="width:100%; margin-bottom:10px;">
+        <tr align="left">
+            <th>Forma de Pago:</th>
+            <th>Método de Pago:</th>
+            <th>Uso del CFDI:</th>
+        </tr>
+        <tr>
+            <td>{{.FormaPago}}</td>
+            <td>{{.MetodoPago}}</td>
+            <td>{{.UsoCFDIReceptor}}</td>
+        </tr>
+    </table>
+
+    <!-- Signatures — matches Python's common.html.jinja layout -->
+    <table style="color:#555; font-size:.70rem; width:1160px; margin-top:20px;">
+        <tr>
+            <td style="vertical-align:top; padding:0;">
+                <table style="table-layout:fixed; width:950px">
+                    <tr align="left"><th>Sello Digital del CFDI</th></tr>
+                    <tr><td style="word-wrap:break-word;">{{.Sello}}</td></tr>
+                    <tr align="left"><th>Sello Digital del SAT</th></tr>
+                    <tr><td style="word-wrap:break-word;">{{.SelloSAT}}</td></tr>
+                </table>
+            </td>
+        </tr>
+    </table>
+    <table style="font-size:.8rem; width:75%; margin-top:10px;">
+        <tr>
+            <th align="left">Fecha/Hora de Certificación:</th>
+            <th align="left">Número de Serie Certificado del SAT:</th>
+            <th align="left">RFC del PAC</th>
+        </tr>
+        <tr>
+            <td>{{.FechaCertificacionSat}}</td>
+            <td>{{.NoCertificadoSAT}}</td>
+            <td>{{.RfcPac}}</td>
+        </tr>
+    </table>
+    <p style="text-align:center; font-size:.85rem; margin-top:20px;">Este documento es una representación impresa de un CFDI</p>
+</body>
+</html>

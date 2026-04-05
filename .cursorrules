@@ -1,0 +1,938 @@
+# Go Backend — Siigo Fiscal Cursor Rules
+
+## Project Context
+
+**What This Is**: Full Go 1.26+ rewrite of the FastAPI/Chalice backend for Siigo Fiscal (Mexican fiscal compliance SaaS). Maintains 100% API parity with 114 production endpoints while delivering 2-10x performance improvements.
+
+**Critical Constraint**: All HTTP responses MUST maintain Chalice-shaped error format `{"Code": "ErrorClass", "Message": "detail"}` for frontend compatibility. Route paths, parameter names, and response structures are immutable.
+
+---
+
+## Tech Stack
+
+### Core
+- **Language**: Go 1.26.1 (strict)
+- **HTTP Router**: `net/http.ServeMux` (pattern-based routing, Go 1.22+)
+- **ORM**: `uptrace/bun` v1.2+ with `pgdriver`
+- **Database**: Aurora PostgreSQL (RDS) via Bun ORM
+- **Config**: Environment variables via `.env` (custom parser, no external deps)
+
+### Infrastructure & Communication
+- **Event Bus**: In-memory pub/sub routing to SQS (matches Python EventBus)
+- **Async Processing**: AWS SQS (25+ queues for domain events)
+- **Storage**: S3 (certs, exports, attachments, XMLs)
+- **Auth**: AWS Cognito User Pool (JWT validation via `golang-jwt/jwt/v5`)
+- **Payments**: Stripe Go SDK v81
+- **AWS SDK**: v2 (SQS, S3, Cognito-IDP)
+
+### Exports & Utilities
+- **Excel**: `github.com/xuri/excelize/v2`
+- **Crypto**: `golang.org/x/crypto` (PKCS8, FIEL certificate handling)
+- **Logging**: `log/slog` (structured JSON logs)
+
+---
+
+## Architecture: Clean Hexagonal with Event-Driven Design
+
+### Folder Structure
+
+```
+go_backend/
+├── cmd/server/          # main.go — wires config, DB, bus, HTTP server
+├── internal/
+│   ├── config/          # Config struct, .env loading
+│   ├── db/              # Database wrapper, tenant schema routing
+│   ├── domain/          # Business logic (pure Go, no framework deps)
+│   │   ├── auth/        # Admin check, JWT decode, context helpers
+│   │   ├── crud/        # Generic Search engine (filters, fuzzy, pagination)
+│   │   ├── event/       # EventBus, SQS event types, subscribers
+│   │   ├── filter/      # Odoo-style domain filter parser
+│   │   ├── cfdi/        # CFDI-specific business logic (IVA/ISR calculations)
+│   │   └── company/     # Certificate handling (PKCS8, FIEL)
+│   ├── handler/         # HTTP handlers (one file per resource)
+│   ├── infra/           # Infrastructure adapters
+│   │   ├── cognito/     # Cognito-IDP client
+│   │   ├── s3/          # S3 client + presign
+│   │   ├── sqs/         # SQS client + event publishing
+│   │   ├── stripe/      # Stripe client
+│   │   └── pasto/       # Pasto/ADD external API client
+│   ├── model/           # Bun ORM models (database entities)
+│   │   ├── control/     # Shared-schema models (user, workspace, company)
+│   │   └── tenant/      # Per-company schema models (cfdi, payment, sat_query)
+│   ├── response/        # Standard JSON response helpers (Chalice-compatible errors)
+│   ├── logger/          # Structured logging (slog wrapper)
+│   └── server/
+│       ├── middleware/  # Auth, CORS, logging, recovery
+│       └── server.go    # Route registration (114 endpoints)
+```
+
+### Key Architectural Principles
+
+1. **Hexagonal Architecture**: Domain layer (`internal/domain/`) has ZERO dependencies on frameworks (no `net/http`, `bun`, `aws-sdk-go`)
+2. **Multi-Tenant Database**: Per-company PostgreSQL schemas with `SET search_path TO "company_identifier"` isolation
+3. **Event-Driven Communication**: EventBus publishes domain events to SQS handlers (async processing)
+4. **CRUD Engine**: Generic `crud.Search` function handles 80% of endpoints (domain filters, fuzzy search, pagination)
+5. **Middleware-Based Auth**: `RequireAuth`, `RequireCompany`, `RequireAdmin`, `RequireAdminCreate` wrap handlers
+
+---
+
+## Code Patterns & Conventions
+
+### 1. Handler Pattern (HTTP Layer)
+
+**Structure**:
+```go
+package handler
+
+type CFDI struct {
+    cfg      *config.Config
+    database *db.Database
+    bus      *event.Bus
+    s3       *s3infra.Client
+}
+
+func NewCFDI(cfg *config.Config, database *db.Database, bus *event.Bus, s3c *s3infra.Client) *CFDI {
+    return &CFDI{cfg: cfg, database: database, bus: bus, s3: s3c}
+}
+
+// Handler implementation
+func (h *CFDI) Search(w http.ResponseWriter, r *http.Request) {
+    conn, _, err := h.tenantConn(r, true) // readOnly = true for GET/search
+    if err != nil {
+        response.InternalError(w, fmt.Sprintf("tenant session: %v", err))
+        return
+    }
+    defer conn.Close()
+
+    raw, err := io.ReadAll(r.Body)
+    if err != nil {
+        response.BadRequest(w, "invalid body")
+        return
+    }
+    
+    params, _, err := crud.ParseSearchBodyJSON(raw)
+    if err != nil {
+        response.BadRequest(w, "invalid JSON")
+        return
+    }
+
+    result, err := crud.Search[tenant.CFDI](r.Context(), conn, params, cfdiMeta)
+    if err != nil {
+        response.InternalError(w, fmt.Sprintf("search: %v", err))
+        return
+    }
+    
+    response.WriteJSON(w, http.StatusOK, result)
+}
+```
+
+**Rules**:
+- ✅ One handler struct per resource (e.g., `CFDI`, `Company`, `User`)
+- ✅ Constructor pattern: `NewCFDI(cfg, database, bus, s3)`
+- ✅ Helper methods: `tenantConn(r, readOnly bool)`, `readBody(r)`
+- ✅ ALWAYS defer `conn.Close()` after `tenantConn()`
+- ✅ Use `response.WriteJSON()`, `response.BadRequest()`, `response.InternalError()` for responses
+- ❌ NEVER return FastAPI-style errors (`{"detail": "msg"}`) — must use Chalice format
+
+---
+
+### 2. Multi-Tenant Database Pattern
+
+**Tenant Connection Acquisition**:
+```go
+// Get tenant connection with search_path set to company schema
+func (h *CFDI) tenantConn(r *http.Request, readOnly bool) (bun.Conn, string, error) {
+    ctx := r.Context()
+    cid, _ := auth.CompanyIdentifierFromContext(ctx) // Extracted by RequireCompany middleware
+    database := db.FromContext(ctx)
+    if database == nil {
+        database = h.database
+    }
+    conn, err := database.TenantConn(ctx, cid, readOnly)
+    return conn, cid, err
+}
+```
+
+**Database Abstraction** (`internal/db/db.go`):
+```go
+type Database struct {
+    Primary *bun.DB  // Read-write connection
+    Replica *bun.DB  // Read-only replica (optional)
+}
+
+func (d *Database) Pool(readOnly bool) *bun.DB {
+    if readOnly {
+        return d.Replica
+    }
+    return d.Primary
+}
+```
+
+**Tenant Session** (`internal/db/tenant.go`):
+```go
+func (d *Database) TenantConn(ctx context.Context, schema string, readOnly bool) (bun.Conn, error) {
+    pool := d.Pool(readOnly)
+    conn, err := pool.Conn(ctx)
+    if err != nil {
+        return bun.Conn{}, fmt.Errorf("acquire conn: %w", err)
+    }
+    // CRITICAL: Set search_path to company schema
+    if _, err = conn.ExecContext(ctx, fmt.Sprintf(`SET search_path TO "%s", public`, schema)); err != nil {
+        conn.Close()
+        return bun.Conn{}, fmt.Errorf("set search_path to %q: %w", schema, err)
+    }
+    return conn, nil
+}
+```
+
+**Rules**:
+- ✅ Use `readOnly = true` for GET/search/resume operations (uses replica if available)
+- ✅ Use `readOnly = false` for POST/PUT/DELETE/create/update operations
+- ✅ ALWAYS acquire tenant connection via `database.TenantConn(ctx, companyIdentifier, readOnly)`
+- ✅ ALWAYS defer `conn.Close()` immediately after acquiring connection
+- ✅ For control schema (user, company, workspace), use `database.Primary` directly (no `TenantConn`)
+- ❌ NEVER mix control and tenant sessions in the same handler (causes schema isolation errors)
+
+---
+
+### 3. CRUD Engine (Generic Search)
+
+**Usage**:
+```go
+var cfdiMeta = crud.ModelMeta{
+    DefaultOrderBy: `"FechaFiltro" DESC`,
+    FuzzyFields:    []string{"NombreEmisor", "NombreReceptor", "RfcEmisor", "RfcReceptor", "UUID"},
+    ActiveColumn:   "active",
+}
+
+func (h *CFDI) Search(w http.ResponseWriter, r *http.Request) {
+    conn, _, err := h.tenantConn(r, true)
+    if err != nil {
+        response.InternalError(w, fmt.Sprintf("tenant session: %v", err))
+        return
+    }
+    defer conn.Close()
+
+    raw, err := io.ReadAll(r.Body)
+    if err != nil {
+        response.BadRequest(w, "invalid body")
+        return
+    }
+    
+    params, _, err := crud.ParseSearchBodyJSON(raw)
+    if err != nil {
+        response.BadRequest(w, "invalid JSON")
+        return
+    }
+
+    result, err := crud.Search[tenant.CFDI](r.Context(), conn, params, cfdiMeta)
+    if err != nil {
+        response.InternalError(w, fmt.Sprintf("search: %v", err))
+        return
+    }
+    
+    response.WriteJSON(w, http.StatusOK, result)
+}
+```
+
+**Domain Filters (Odoo-style)**:
+```json
+{
+  "domain": [
+    ["company_identifier", "=", "abc-123-uuid"],
+    ["Fecha", ">=", "2024-01-01"],
+    ["TipoDeComprobante", "in", ["I", "E"]],
+    "|",
+    ["Estatus", "=", true],
+    ["active", "=", true]
+  ],
+  "limit": 50,
+  "offset": 0,
+  "order_by": "Fecha DESC",
+  "fuzzy_search": "ACME Corp",
+  "active": true
+}
+```
+
+**Search Response**:
+```json
+{
+  "data": [...],
+  "next_page": true,
+  "total_records": 1234
+}
+```
+
+**Rules**:
+- ✅ Use `crud.Search[T]` for standard paginated queries
+- ✅ Define `ModelMeta` as package-level var (reusable across handlers)
+- ✅ Use `crud.ParseSearchBodyJSON` to extract search params from request body
+- ✅ Domain filters automatically handle `AND`, `OR` (`|`), `IN`, `=`, `!=`, `>`, `<`, `>=`, `<=`, `LIKE`, `ILIKE`
+- ✅ Fuzzy search combines all `FuzzyFields` with `ILIKE` (case-insensitive, unaccented)
+- ✅ Active filter: `active = true` (default) includes `active IS NULL` (backward compat)
+
+---
+
+### 4. Event-Driven Architecture (EventBus)
+
+**Publishing Events**:
+```go
+import (
+    "github.com/siigofiscal/go_backend/internal/domain/event"
+)
+
+func (h *Company) UploadCer(w http.ResponseWriter, r *http.Request) {
+    // ... business logic ...
+    
+    // Publish domain event to trigger async processing
+    h.bus.Publish(event.EventCerUploaded, event.CerUploadedEvent{
+        CompanyIdentifier: company.Identifier,
+        UploadedAt:        time.Now(),
+    })
+    
+    response.WriteJSON(w, http.StatusOK, company)
+}
+```
+
+**Event Wiring** (`internal/infra/sqs/register.go` — SQS subscriptions; complex handlers stay in `internal/domain/event/subscribe.go`):
+```go
+func SubscribeAllHandlers(bus *event.Bus, cfg *config.Config, pub port.MessagePublisher) {
+    // SAT / ADD / export / etc.: sqsH(cfg.SQS…) per event type
+    bus.Subscribe(event.EventTypeMassiveExportCreated, sqsH(cfg.SQSMassiveExport))
+    // …
+}
+```
+
+**EventBus Behavior**:
+- **Local Mode** (`LOCAL_INFRA=true`): Events dispatched asynchronously via goroutines
+- **Production Mode**: Events dispatched synchronously (matches Python sequential `_publish`)
+
+**Rules**:
+- ✅ Define event types as string constants in `internal/domain/event/types.go`
+- ✅ Wire SQS handlers via `internal/infra/sqs/register.go:SubscribeAllHandlers()` (called from `cmd/server/main.go`)
+- ✅ Use `bus.Publish()` for fire-and-forget async (no error checking)
+- ✅ SQS handlers serialize events to JSON and send to configured queue
+- ❌ NEVER publish events without first subscribing handlers (causes `NO_HANDLERS` warning)
+
+---
+
+### 5. Authentication & Authorization (Middleware)
+
+**Middleware Types** (`internal/server/middleware/auth.go`):
+
+```go
+// RequireAuth: Valid JWT in access_token header
+mux.HandleFunc("POST /api/Company/", authMW.RequireAuth(companyH.Create))
+
+// RequireCompany: Valid JWT + company_identifier + user has OPERATOR permission
+mux.HandleFunc("POST /api/CFDI/search", authMW.RequireCompany(cfdiH.Search))
+
+// RequireAdmin: Valid JWT + email in ADMIN_EMAILS
+mux.HandleFunc("PUT /api/User/set_email/{old}/{new}", authMW.RequireAdmin(userH.SetEmail))
+
+// RequireAdminCreate: Admin email OR company permission
+mux.HandleFunc("POST /api/Company/admin_create", authMW.RequireAdminCreate(companyH.AdminCreate))
+```
+
+**Context Extraction**:
+```go
+import "github.com/siigofiscal/go_backend/internal/domain/auth"
+
+func (h *Handler) SomeEndpoint(w http.ResponseWriter, r *http.Request) {
+    user, _ := auth.UserFromContext(r.Context())           // Injected by RequireAuth
+    company, _ := auth.CompanyFromContext(r.Context())     // Injected by RequireCompany
+    cid, _ := auth.CompanyIdentifierFromContext(r.Context()) // Injected by RequireCompany
+    jsonBody, _ := auth.JSONBodyFromContext(r.Context())   // Injected by RequireCompany
+}
+```
+
+**Company Identifier Extraction Order** (in `middleware/auth.go:RequireCompany`):
+1. Request body: `json_body["company_identifier"]`
+2. Request body domain: `json_body["domain"][0][2]` (first domain condition `["company_identifier", "=", "<UUID>"]`)
+3. Header: `r.Header.Get("company_identifier")`
+4. Path parameter: `r.PathValue("company_identifier")` or `r.PathValue("cid")`
+
+**Rules**:
+- ✅ Use `access_token` header (NOT `Authorization: Bearer`) for JWT (Cognito integration)
+- ✅ JWT validated against Cognito User Pool JWKS (cached, auto-refresh)
+- ✅ User lookup by `cognito_sub` claim (maps to `user.cognito_sub` column)
+- ✅ Permission check: `user_id + company_id + role = OPERATOR` in `permission` table
+- ✅ Admin check: `user.email IN cfg.AdminEmails`
+- ❌ NEVER bypass auth middleware for endpoints that modify data
+
+---
+
+### 6. Error Handling & Response Format
+
+**Chalice-Compatible Errors** (`internal/response/response.go`):
+```go
+type ChaliceError struct {
+    Code    string `json:"Code"`
+    Message string `json:"Message"`
+}
+
+func BadRequest(w http.ResponseWriter, msg string) {
+    WriteJSON(w, http.StatusBadRequest, ChaliceError{
+        Code:    "BadRequestError",
+        Message: msg,
+    })
+}
+
+func Unauthorized(w http.ResponseWriter, msg string) {
+    WriteJSON(w, http.StatusUnauthorized, ChaliceError{
+        Code:    "UnauthorizedError",
+        Message: msg,
+    })
+}
+```
+
+**Available Response Helpers**:
+- `response.WriteJSON(w, status, data)` — Generic JSON response
+- `response.BadRequest(w, msg)` — 400 with `BadRequestError`
+- `response.Unauthorized(w, msg)` — 401 with `UnauthorizedError`
+- `response.Forbidden(w, msg)` — 403 with `ForbiddenError`
+- `response.NotFound(w, msg)` — 404 with `NotFoundError`
+- `response.InternalError(w, msg)` — 500 with `InternalServerError`
+
+**Rules**:
+- ✅ ALWAYS use `response` package helpers (never construct errors manually)
+- ✅ CRITICAL: Error shape `{"Code": "...", "Message": "..."}` is IMMUTABLE (frontend dependency)
+- ❌ NEVER use standard `http.Error()` or custom error formats
+- ❌ NEVER change error code strings (e.g., `BadRequestError` → `BadRequest`)
+
+---
+
+### 7. Logging
+
+**Structured Logging** (`internal/logger/logger.go`):
+```go
+import "log/slog"
+
+// Initialization (in main.go)
+logger.Init(cfg.LogLevel) // DEBUG, INFO, WARN, ERROR
+
+// Usage
+slog.Info("database connected", "host", cfg.DBHost, "db", cfg.DBName)
+slog.Warn("event_bus: no handlers", "event_type", string(eventType))
+slog.Error("tenant session failed", "error", err, "company_identifier", cid)
+```
+
+**Log Levels**:
+- `DEBUG`: Verbose info (query plans, payload dumps)
+- `INFO`: Important state changes (server started, DB connected)
+- `WARN`: Unexpected but recoverable (NO_HANDLERS, rate limit)
+- `ERROR`: Actionable errors (DB timeout, external API failure)
+
+**Rules**:
+- ✅ Use `slog` (stdlib structured logging)
+- ✅ Always include context fields (e.g., `company_identifier`, `user_id`, `event_type`)
+- ❌ NEVER use `fmt.Println()` or unstructured logs
+- ❌ NEVER log sensitive data (access_token, passwords, SSNs)
+
+---
+
+## ORM Patterns (Bun)
+
+### 1. Model Definition
+
+**Tenant Model** (per-company schema):
+```go
+package tenant
+
+import (
+    "time"
+    "github.com/uptrace/bun"
+)
+
+type CFDI struct {
+    bun.BaseModel `bun:"table:cfdi"`
+
+    CompanyIdentifier string    `bun:"company_identifier,pk,type:uuid" json:"company_identifier"`
+    IsIssued          bool      `bun:"is_issued,pk" json:"is_issued"`
+    UUID              string    `bun:"UUID,pk,type:uuid" json:"UUID"`
+
+    Fecha             time.Time  `bun:"Fecha,notnull" json:"Fecha"`
+    Total             float64    `bun:"Total,notnull" json:"Total"`
+    TipoDeComprobante string     `bun:"TipoDeComprobante,notnull" json:"TipoDeComprobante"`
+    RfcEmisor         string     `bun:"RfcEmisor,notnull" json:"RfcEmisor"`
+    NombreEmisor      *string    `bun:"NombreEmisor" json:"NombreEmisor"`
+    Estatus           bool       `bun:"Estatus,notnull" json:"Estatus"`
+    Active            bool       `bun:"active,notnull" json:"active"`
+    // ... 80+ fields matching CFDI 4.0 XML schema ...
+}
+```
+
+**Control Model** (global schema):
+```go
+package control
+
+type Company struct {
+    bun.BaseModel `bun:"table:company"`
+
+    ID                int       `bun:"id,pk,autoincrement" json:"id"`
+    Identifier        string    `bun:"identifier,type:uuid,unique,notnull" json:"identifier"`
+    RFC               string    `bun:"rfc,notnull" json:"rfc"`
+    Name              *string   `bun:"name" json:"name"`
+    WorkspaceID       int       `bun:"workspace_id,notnull" json:"workspace_id"`
+    Data              *string   `bun:"data,type:jsonb" json:"data"`
+    Active            bool      `bun:"active,notnull,default:true" json:"active"`
+    CreatedAt         time.Time `bun:"created_at,notnull" json:"created_at"`
+    UpdatedAt         time.Time `bun:"updated_at,notnull" json:"updated_at"`
+}
+```
+
+**Rules**:
+- ✅ Embed `bun.BaseModel` in all models
+- ✅ Use `bun` struct tags for column mapping: `bun:"column_name,pk,notnull,type:uuid"`
+- ✅ Use `json` tags for API serialization
+- ✅ Nullable fields MUST be pointers (`*string`, `*int`, `*time.Time`)
+- ✅ Boolean flags default to `false` (Bun zero value)
+- ✅ CFDI fields: Use SAT XML field names EXACTLY (`TipoDeComprobante`, NOT `tipo_de_comprobante`)
+- ❌ NEVER snake_case CFDI model fields (breaks XML parsing compatibility)
+
+---
+
+### 2. Querying
+
+**Basic Select**:
+```go
+var companies []control.Company
+err := database.Primary.NewSelect().
+    Model(&companies).
+    Where("active = ?", true).
+    Where("workspace_id = ?", workspaceID).
+    Order("created_at DESC").
+    Limit(50).
+    Scan(ctx)
+```
+
+**Joins**:
+```go
+var users []control.User
+err := database.Primary.NewSelect().
+    Model(&users).
+    Relation("Permissions").                           // Loads User.Permissions via bun:"rel:has-many"
+    Relation("Permissions.Company").                   // Nested relation
+    Join("JOIN workspace AS w ON w.id = users.workspace_id").
+    Where("w.identifier = ?", workspaceIdentifier).
+    Scan(ctx)
+```
+
+**Tenant Query**:
+```go
+conn, err := database.TenantConn(ctx, companyIdentifier, true)
+if err != nil {
+    return err
+}
+defer conn.Close()
+
+var cfdis []tenant.CFDI
+err = conn.NewSelect().
+    Model(&cfdis).
+    Where(`"Fecha" >= ?`, startDate).
+    Where(`"TipoDeComprobante" = ?`, "I").
+    Order(`"Fecha" DESC`).
+    Limit(100).
+    Scan(ctx)
+```
+
+**Rules**:
+- ✅ ALWAYS quote CFDI field names with `""` (Pascal case conflicts with SQL keywords)
+- ✅ Use `?` placeholders for query parameters (avoid SQL injection)
+- ✅ Use `Scan(ctx)` for struct results, `Count(ctx)` for counts
+- ✅ For large result sets, use `Limit` + `Offset` (pagination)
+- ❌ NEVER use string interpolation for SQL queries (`fmt.Sprintf` is dangerous)
+
+---
+
+### 3. Writing Data
+
+**Insert**:
+```go
+company := &control.Company{
+    Identifier:  uuid.NewString(),
+    RFC:         "XAXX010101000",
+    Name:        ptr("ACME Corp"),
+    WorkspaceID: workspaceID,
+    Active:      true,
+    CreatedAt:   time.Now(),
+    UpdatedAt:   time.Now(),
+}
+
+_, err := database.Primary.NewInsert().
+    Model(company).
+    Exec(ctx)
+```
+
+**Update**:
+```go
+_, err := database.Primary.NewUpdate().
+    Model((*control.Company)(nil)).
+    Set("name = ?", "New Name").
+    Set("updated_at = ?", time.Now()).
+    Where("identifier = ?", companyIdentifier).
+    Exec(ctx)
+```
+
+**Batch Insert** (high performance):
+```go
+cfdis := make([]*tenant.CFDI, 1000)
+// ... populate cfdis ...
+
+_, err := conn.NewInsert().
+    Model(&cfdis).
+    On("CONFLICT (company_identifier, is_issued, UUID) DO UPDATE").
+    Set("Estatus = EXCLUDED.Estatus").
+    Set("updated_at = EXCLUDED.updated_at").
+    Exec(ctx)
+```
+
+**Rules**:
+- ✅ Use `NewInsert().Model().Exec()` for single/batch inserts
+- ✅ Use `NewUpdate().Set().Where().Exec()` for updates
+- ✅ Use `ON CONFLICT ... DO UPDATE` for upserts (PostgreSQL)
+- ✅ ALWAYS set `updated_at = time.Now()` on updates
+- ❌ NEVER execute writes on read-only connections (causes `cannot execute UPDATE in a read-only transaction`)
+
+---
+
+## Configuration Management
+
+**Environment Variables** (`internal/config/config.go`):
+```go
+type Config struct {
+    // Database
+    DBHost     string
+    DBPort     int
+    DBName     string
+    DBUser     string
+    DBPassword string
+
+    // AWS
+    RegionName         string
+    AWSAccessKeyID     string
+    AWSSecretAccessKey string
+    AWSEndpointURL     string  // LocalStack: http://localhost:4566
+    LocalInfra         bool    // Dev mode flag
+
+    // S3 Buckets
+    S3Certs       string
+    S3Attachments string
+    S3Export      string
+
+    // SQS Queues (25+ queues)
+    SQSVerifyQuery string
+    SQSExport      string
+    // ...
+
+    // Cognito
+    CognitoUserPoolID string
+    CognitoClientID   string
+
+    // Admin
+    AdminEmails []string
+}
+
+func Load() (*Config, error) {
+    loadDotEnv() // Custom .env parser (no external deps)
+    
+    return &Config{
+        DBHost:     mustEnv("DB_HOST"),
+        DBPort:     envInt("DB_PORT", 5432),
+        LocalInfra: envBool("LOCAL_INFRA"),
+        AdminEmails: parseAdminEmails(envOr("ADMIN_EMAILS", "")),
+        // ...
+    }, nil
+}
+```
+
+**Rules**:
+- ✅ Use `.env` file for local development (symlinked from `fastapi_backend/.env`)
+- ✅ Use `mustEnv(key)` for required vars (panics if missing)
+- ✅ Use `envOr(key, default)` for optional vars with fallback
+- ✅ Use `envBool(key)` for boolean flags (`1` = true, `0` = false)
+- ✅ `LOCAL_INFRA=true` enables: dev auth endpoints, CORS middleware, async event dispatch
+- ❌ NEVER hardcode secrets or environment-specific URLs in code
+
+---
+
+## Testing Guidelines
+
+**Test Structure**:
+```
+go_backend/
+├── internal/
+│   ├── handler/
+│   │   ├── cfdi.go
+│   │   └── cfdi_test.go
+│   ├── domain/
+│   │   ├── crud/
+│   │   │   ├── search.go
+│   │   │   └── search_test.go
+```
+
+**Unit Test Example**:
+```go
+package handler_test
+
+import (
+    "net/http/httptest"
+    "testing"
+)
+
+func TestCFDISearch(t *testing.T) {
+    // Setup: Mock database, config, bus
+    cfg := &config.Config{LocalInfra: true}
+    database := setupTestDB(t)
+    bus := event.NewBus(true)
+    
+    handler := NewCFDI(cfg, database, bus, nil)
+    
+    // Create test request
+    req := httptest.NewRequest("POST", "/api/CFDI/search", strings.NewReader(`{
+        "domain": [["company_identifier", "=", "test-uuid"]],
+        "limit": 10
+    }`))
+    w := httptest.NewRecorder()
+    
+    // Execute
+    handler.Search(w, req)
+    
+    // Assert
+    if w.Code != 200 {
+        t.Fatalf("expected 200, got %d", w.Code)
+    }
+}
+```
+
+**Rules**:
+- ✅ Use table-driven tests for multiple scenarios
+- ✅ Mock external dependencies (AWS, Cognito, Stripe)
+- ✅ Use `httptest.NewRecorder()` for handler tests
+- ✅ Test error paths (unauthorized, bad request, not found)
+- ❌ NEVER use real AWS services in tests (use mocks or LocalStack)
+
+---
+
+## Common Patterns
+
+### 1. CRUD Endpoints (Search/Create/Update/Delete)
+
+**Search**:
+```go
+func (h *Handler) Search(w http.ResponseWriter, r *http.Request) {
+    conn, _, err := h.tenantConn(r, true)
+    if err != nil {
+        response.InternalError(w, fmt.Sprintf("tenant session: %v", err))
+        return
+    }
+    defer conn.Close()
+
+    raw, _ := io.ReadAll(r.Body)
+    params, _, _ := crud.ParseSearchBodyJSON(raw)
+    
+    result, err := crud.Search[tenant.Model](r.Context(), conn, params, modelMeta)
+    if err != nil {
+        response.InternalError(w, fmt.Sprintf("search: %v", err))
+        return
+    }
+    
+    response.WriteJSON(w, http.StatusOK, result)
+}
+```
+
+**Create**:
+```go
+func (h *Handler) Create(w http.ResponseWriter, r *http.Request) {
+    user, _ := auth.UserFromContext(r.Context())
+    
+    var req CreateRequest
+    if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+        response.BadRequest(w, "invalid JSON")
+        return
+    }
+    
+    record := &control.Model{
+        Identifier: uuid.NewString(),
+        CreatedBy:  user.ID,
+        CreatedAt:  time.Now(),
+        UpdatedAt:  time.Now(),
+    }
+    
+    _, err := h.database.Primary.NewInsert().Model(record).Exec(r.Context())
+    if err != nil {
+        response.InternalError(w, fmt.Sprintf("insert: %v", err))
+        return
+    }
+    
+    response.WriteJSON(w, http.StatusOK, record)
+}
+```
+
+---
+
+### 2. CFDI Tax Calculations (IVA/ISR)
+
+**IVA Calculation** (`internal/domain/cfdi/iva.go`):
+```go
+type IVAResult struct {
+    TotalIssued     float64
+    TotalReceived   float64
+    IVAToPay        float64
+    IVAToReturn     float64
+}
+
+func CalculateIVA(ctx context.Context, conn bun.Conn, companyID string, period time.Time) (*IVAResult, error) {
+    // Query issued CFDIs (TipoDeComprobante = 'I')
+    // Query received CFDIs (TipoDeComprobante = 'E')
+    // Calculate IVA balance
+    // ...
+}
+```
+
+**ISR Calculation** (`internal/domain/cfdi/isr.go`):
+```go
+func CalculateISR(ctx context.Context, conn bun.Conn, companyID string, period time.Time, percentage float64) (*ISRResult, error) {
+    // Aggregate income CFDIs
+    // Apply ISR percentage (0.47 or 0.53)
+    // Return taxable base + ISR amount
+    // ...
+}
+```
+
+---
+
+### 3. Export Generation (XLSX/PDF)
+
+**Excel Export** (using `excelize`):
+```go
+import "github.com/xuri/excelize/v2"
+
+func ExportToExcel(cfdis []tenant.CFDI) ([]byte, error) {
+    f := excelize.NewFile()
+    sheet := "CFDIs"
+    f.NewSheet(sheet)
+    
+    // Write headers
+    f.SetCellValue(sheet, "A1", "UUID")
+    f.SetCellValue(sheet, "B1", "Fecha")
+    f.SetCellValue(sheet, "C1", "Total")
+    
+    // Write data rows
+    for i, cfdi := range cfdis {
+        row := i + 2
+        f.SetCellValue(sheet, fmt.Sprintf("A%d", row), cfdi.UUID)
+        f.SetCellValue(sheet, fmt.Sprintf("B%d", row), cfdi.Fecha.Format("2006-01-02"))
+        f.SetCellValue(sheet, fmt.Sprintf("C%d", row), cfdi.Total)
+    }
+    
+    buf, err := f.WriteToBuffer()
+    if err != nil {
+        return nil, err
+    }
+    return buf.Bytes(), nil
+}
+```
+
+**S3 Upload + Presigned URL**:
+```go
+key := fmt.Sprintf("exports/%s/%s.xlsx", companyID, uuid.NewString())
+_, err := s3Client.Upload(ctx, cfg.S3Export, key, bytes.NewReader(excelBytes))
+if err != nil {
+    return "", err
+}
+
+url, err := s3Client.PresignedGetURL(cfg.S3Export, key, 24*time.Hour)
+if err != nil {
+    return "", err
+}
+return url, nil
+```
+
+---
+
+## Critical Constraints
+
+### DO NOT
+
+1. ❌ Change route paths (breaks frontend: `POST /api/CFDI/search` is immutable)
+2. ❌ Change error response format (must be `{"Code": "...", "Message": "..."}`)
+3. ❌ Snake_case CFDI model fields (breaks XML parsing: `TipoDeComprobante` NOT `tipo_de_comprobante`)
+4. ❌ Mix control and tenant sessions in same handler (schema isolation violation)
+5. ❌ Use standard `http.Error()` or custom error formats
+6. ❌ Forget to `defer conn.Close()` after `TenantConn()` (connection leak)
+7. ❌ Publish events without subscribing handlers (causes `NO_HANDLERS` warning)
+8. ❌ Hardcode environment variables or secrets
+9. ❌ Use `fmt.Println()` or unstructured logging
+10. ❌ Execute writes on read-only connections
+
+---
+
+### ALWAYS
+
+1. ✅ Use `response` package for all HTTP responses
+2. ✅ Use `crud.Search` for paginated queries (80% of endpoints)
+3. ✅ Acquire tenant connections via `database.TenantConn(ctx, companyID, readOnly)`
+4. ✅ Defer `conn.Close()` immediately after acquiring connection
+5. ✅ Use `slog` for structured logging with context fields
+6. ✅ Quote CFDI field names in SQL: `"FechaFiltro"`, `"TipoDeComprobante"`
+7. ✅ Validate JWT via `RequireAuth` middleware
+8. ✅ Extract company identifier via `RequireCompany` middleware
+9. ✅ Use `readOnly = true` for GET/search operations
+10. ✅ Use `readOnly = false` for POST/PUT/DELETE operations
+
+---
+
+## Code Review Checklist
+
+Before committing:
+- [ ] All handlers use `response` package for errors?
+- [ ] Tenant connections acquired with `database.TenantConn()` and deferred `conn.Close()`?
+- [ ] Read-only vs read-write flag set correctly?
+- [ ] CFDI field names quoted in SQL queries?
+- [ ] Logging uses `slog` with context fields?
+- [ ] No hardcoded secrets or environment URLs?
+- [ ] Route paths match FastAPI/Chalice originals?
+- [ ] Error codes match Chalice format (`BadRequestError`, NOT `BadRequest`)?
+- [ ] `go fmt` run on all modified files?
+- [ ] No linter errors from `golangci-lint`?
+
+---
+
+## Performance Best Practices
+
+1. **Connection Pooling**: Max 10 open, 5 idle, 5min lifetime
+2. **Read Replicas**: Use for all GET/search/resume operations
+3. **Statement Timeout**: 30s default (prevents runaway queries)
+4. **Batch Inserts**: Use `NewInsert().Model(&slice)` for bulk operations
+5. **Indexes**: Ensure compound indexes on `(company_identifier, is_issued, Fecha)` for CFDI queries
+6. **Fuzzy Search**: ILIKE with unaccent (use `pg_trgm` extension for performance)
+
+---
+
+## Documentation References
+
+- **Bun ORM**: https://bun.uptrace.dev/
+- **Go stdlib**: https://pkg.go.dev/std
+- **CFDI 4.0 Spec**: http://www.sat.gob.mx/esquemas/retencionpago/2/cfdi40.xsd
+- **Project Overview**: `../.cursor/rules/project-overview.mdc`
+- **FastAPI Backend Rules**: `../fastapi_backend/.cursorrules`
+
+---
+
+## Summary
+
+This Go backend is a **high-performance, production-grade rewrite** of the Python/FastAPI backend with 100% API parity. Key architectural principles:
+
+1. **Clean Hexagonal Architecture**: Domain layer has zero framework dependencies
+2. **Multi-Tenant Database**: Per-company PostgreSQL schemas with `SET search_path` isolation
+3. **Event-Driven**: EventBus publishes domain events to SQS for async processing
+4. **Generic CRUD Engine**: `crud.Search` handles 80% of endpoints with Odoo-style domain filters
+5. **Chalice Compatibility**: Error responses, route paths, and auth patterns match original
+6. **Performance**: 2-10x faster than Python (measured via local benchmarks)
+
+**When in doubt, preserve the existing pattern. This codebase prioritizes API stability over innovation.**
+
+---
+
+**Last Updated**: 2026-04-01

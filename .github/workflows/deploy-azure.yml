@@ -1,0 +1,78 @@
+# Deploy go_backend to Azure Container Apps (ACR push + revision update).
+# Repo: https://github.com/JMSolorzano-13/go_backend
+#
+# Secret: AZURE_CREDENTIALS — JSON from `az ad sp create-for-rbac --sdk-auth` (clientId, clientSecret, subscriptionId, tenantId, …).
+# Variables: AZURE_RESOURCE_GROUP, AZURE_ACR_NAME, AZURE_CONTAINER_APP_NAME
+
+name: Deploy Azure (ACA)
+
+on:
+  workflow_dispatch:
+    inputs:
+      image_tag:
+        description: "Image tag (empty = short SHA)"
+        required: false
+        default: ""
+      docker_target:
+        description: "Dockerfile target (prod | dev)"
+        required: false
+        default: "prod"
+  push:
+    branches:
+      - main
+    paths-ignore:
+      - "**/*.md"
+      - ".github/**"
+
+permissions:
+  contents: read
+
+env:
+  IMAGE_NAME: go-backend
+
+jobs:
+  build-push-deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+
+      - name: Azure login (service principal)
+        uses: azure/login@v2
+        with:
+          creds: ${{ secrets.AZURE_CREDENTIALS }}
+
+      - name: Derive image tag
+        id: tag
+        run: |
+          IT="${{ github.event.inputs.image_tag }}"
+          if [ -n "$IT" ]; then
+            echo "value=$IT" >> "$GITHUB_OUTPUT"
+          else
+            echo "value=${GITHUB_SHA::7}" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: ACR login
+        run: az acr login --name "${{ vars.AZURE_ACR_NAME }}"
+
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ./Dockerfile
+          target: ${{ github.event.inputs.docker_target || 'prod' }}
+          push: true
+          tags: |
+            ${{ vars.AZURE_ACR_NAME }}.azurecr.io/${{ env.IMAGE_NAME }}:${{ steps.tag.outputs.value }}
+            ${{ vars.AZURE_ACR_NAME }}.azurecr.io/${{ env.IMAGE_NAME }}:latest
+          platforms: linux/amd64
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Update Container App
+        run: |
+          az containerapp update \
+            --name "${{ vars.AZURE_CONTAINER_APP_NAME }}" \
+            --resource-group "${{ vars.AZURE_RESOURCE_GROUP }}" \
+            --image "${{ vars.AZURE_ACR_NAME }}.azurecr.io/${{ env.IMAGE_NAME }}:${{ steps.tag.outputs.value }}" \
+            --output none
