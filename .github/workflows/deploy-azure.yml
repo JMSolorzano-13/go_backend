@@ -2,7 +2,8 @@
 # Repo: https://github.com/JMSolorzano-13/go_backend
 #
 # Secret: AZURE_CREDENTIALS — JSON from `az ad sp create-for-rbac --sdk-auth` (clientId, clientSecret, subscriptionId, tenantId, …).
-# Variables: AZURE_RESOURCE_GROUP, AZURE_ACR_NAME, AZURE_CONTAINER_APP_NAME
+# Repository variables (Settings → Secrets and variables → Actions → Variables):
+#   AZURE_RESOURCE_GROUP, AZURE_ACR_NAME (registry name only, e.g. myregistry), AZURE_CONTAINER_APP_NAME
 
 name: Deploy Azure (ACA)
 
@@ -22,7 +23,6 @@ on:
       - main
     paths-ignore:
       - "**/*.md"
-      - ".github/**"
 
 permissions:
   contents: read
@@ -40,6 +40,20 @@ jobs:
         uses: azure/login@v2
         with:
           creds: ${{ secrets.AZURE_CREDENTIALS }}
+
+      # #region agent log
+      - name: Validate Actions variables (ACR / RG / Container App)
+        run: |
+          missing=""
+          [ -z "${{ vars.AZURE_ACR_NAME }}" ] && missing="${missing}AZURE_ACR_NAME "
+          [ -z "${{ vars.AZURE_RESOURCE_GROUP }}" ] && missing="${missing}AZURE_RESOURCE_GROUP "
+          [ -z "${{ vars.AZURE_CONTAINER_APP_NAME }}" ] && missing="${missing}AZURE_CONTAINER_APP_NAME "
+          if [ -n "$missing" ]; then
+            echo "::error::Missing GitHub Actions repository variables: $missing"
+            echo "::notice::Add them under Settings → Secrets and variables → Actions → Variables (not Secrets). Values: terraform output -json registry / resource_group_name / compute (container app name)."
+            exit 1
+          fi
+      # #endregion
 
       - name: Derive image tag
         id: tag
