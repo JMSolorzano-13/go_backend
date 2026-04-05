@@ -1,6 +1,7 @@
-# Compiled binary
-server
-go-backend
+# Compiled binaries at repo root only (plain "server" would ignore cmd/server/)
+/server
+/go-backend
+bin/
 *.exe
 
 # IDE
