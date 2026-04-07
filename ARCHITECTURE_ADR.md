@@ -367,6 +367,48 @@ Add circuit breakers for external dependencies (Stripe, Odoo, SAT).
 
 ---
 
+## ADR-010: Self-Managed Auth for Azure (Cognito Replacement)
+
+**Status**: Accepted
+
+**Context**:
+Azure deployment cannot use AWS Cognito. The `port.IdentityProvider` interface was defined but Cognito was used directly via concrete types.
+
+**Decision**:
+Implement `internal/infra/selfauth/Provider` — bcrypt password hashing + self-issued HS256 JWTs. Refactor `handler/user.go` and `server.go` to depend on `port.IdentityProvider` interface. Cognito adapter (`cognito/adapter.go`) still exists for AWS deployments.
+
+**Rationale**:
+- Eliminates AWS dependency for Azure; no external IdP needed for dev
+- `port.IdentityProvider` was already designed for this swap
+- HS256 JWTs validated by same `auth.JWTDecoder` (new `decodeSelfAuth` path)
+- Entra ID B2C can be added as a third adapter later without handler changes
+- Frontend unchanged — same `POST /api/User/auth` + `access_token` header flow
+
+**Trade-offs**:
+- Self-managed auth lacks MFA, social login, hosted UI (add Entra B2C for those)
+- `SELFAUTH_SIGNING_KEY` must be securely managed (Key Vault secret in prod)
+- Password reset flow simplified (no email delivery yet)
+
+---
+
+## ADR-011: Go-Native DB Migrations (Alembic Replacement)
+
+**Status**: Accepted
+
+**Context**:
+The Go Docker image doesn't ship Python/Poetry. Company creation shelled out to `run_tenant_migration.sh` which required the `fastapi_backend` directory.
+
+**Decision**:
+Embedded SQL migrations in `internal/db/migrations/*.sql` with a lightweight runner (`internal/db/migrate.go`). Control schema DDL derived from Alembic head. Runs on startup when `RUN_MIGRATIONS=1`.
+
+**Rationale**:
+- Zero Python dependency in the Go container image
+- Idempotent (`CREATE TABLE IF NOT EXISTS`, `CREATE INDEX IF NOT EXISTS`)
+- `schema_migrations` table tracks applied versions
+- Tenant schema migrations can be added as numbered SQL files
+
+---
+
 ## References
 
 - [Python Backend](../fastapi_backend/)

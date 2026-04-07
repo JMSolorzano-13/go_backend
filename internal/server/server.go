@@ -9,12 +9,11 @@ import (
 	"github.com/siigofiscal/go_backend/internal/domain/event"
 	"github.com/siigofiscal/go_backend/internal/domain/port"
 	"github.com/siigofiscal/go_backend/internal/handler"
-	cognitoinfra "github.com/siigofiscal/go_backend/internal/infra/cognito"
 	stripeinfra "github.com/siigofiscal/go_backend/internal/infra/stripe"
 	"github.com/siigofiscal/go_backend/internal/server/middleware"
 )
 
-func New(cfg *config.Config, database *db.Database, bus *event.Bus, files port.FileStorage, cognitoClient *cognitoinfra.Client, jwtDecoder *auth.JWTDecoder, stripeClient ...*stripeinfra.Client) http.Handler {
+func New(cfg *config.Config, database *db.Database, bus *event.Bus, files port.FileStorage, idp port.IdentityProvider, jwtDecoder *auth.JWTDecoder, stripeClient ...*stripeinfra.Client) http.Handler {
 	var sc *stripeinfra.Client
 	if len(stripeClient) > 0 {
 		sc = stripeClient[0]
@@ -55,7 +54,7 @@ func New(cfg *config.Config, database *db.Database, bus *event.Bus, files port.F
 	mux.HandleFunc("GET /api/Company/get_isr_percentage", authMW.RequireCompany(companyH.GetISRPercentage))
 
 	// --- Phase 7: User management (15 endpoints) ---
-	userH := handler.NewUser(cfg, database, cognitoClient, jwtDecoder)
+	userH := handler.NewUser(cfg, database, idp, jwtDecoder)
 	mux.HandleFunc("POST /api/User/auth", userH.Auth)
 	mux.HandleFunc("GET /api/User/auth/{code}", userH.AuthByCode)
 	mux.HandleFunc("POST /api/User/auth_challenge", userH.AuthChallenge)

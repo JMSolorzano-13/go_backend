@@ -14,6 +14,7 @@ type User struct {
 	Identifier                   string     `bun:"identifier,type:uuid,notnull,unique" json:"identifier"`
 	Name                         *string    `bun:"name" json:"name"`
 	Email                        string     `bun:"email,notnull" json:"email"`
+	PasswordHash                 *string    `bun:"password_hash" json:"-"`
 	CognitoSub                   *string    `bun:"cognito_sub,unique" json:"cognito_sub"`
 	InvitedByID                  *int64     `bun:"invited_by_id" json:"invited_by_id"`
 	SourceName                   *string    `bun:"source_name" json:"source_name"`

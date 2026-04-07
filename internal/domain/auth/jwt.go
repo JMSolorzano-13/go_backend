@@ -36,10 +36,14 @@ type JWTDecoder struct {
 	mu        sync.RWMutex
 	lastFetch time.Time
 	cacheTTL  time.Duration
+
+	// Self-managed auth (HS256) — used when CloudProvider=azure.
+	selfAuthKey    []byte
+	selfAuthIssuer string
+	selfAuthAud    string
 }
 
-// NewJWTDecoder builds a JWT decoder. fetch is required when validating Cognito
-// tokens (!LocalInfra with a user pool); it may be nil for local-only decode paths.
+// NewJWTDecoder builds a JWT decoder for Cognito JWKS (RS256).
 func NewJWTDecoder(cfg *config.Config, fetch JWKSFetcher) *JWTDecoder {
 	var jwksURL string
 	if !cfg.LocalInfra && cfg.CognitoUserPoolID != "" {
@@ -57,11 +61,44 @@ func NewJWTDecoder(cfg *config.Config, fetch JWKSFetcher) *JWTDecoder {
 	}
 }
 
+// NewJWTDecoderSelfAuth builds a JWT decoder for self-managed HS256 tokens.
+func NewJWTDecoderSelfAuth(cfg *config.Config, signingKey []byte, issuer, audience string) *JWTDecoder {
+	return &JWTDecoder{
+		cfg:            cfg,
+		keyCache:       make(map[string]*rsa.PublicKey),
+		cacheTTL:       1 * time.Hour,
+		selfAuthKey:    signingKey,
+		selfAuthIssuer: issuer,
+		selfAuthAud:    audience,
+	}
+}
+
 func (d *JWTDecoder) Decode(tokenString string) (*Claims, error) {
 	if d.cfg.LocalInfra {
 		return d.decodeLocal(tokenString)
 	}
+	if len(d.selfAuthKey) > 0 {
+		return d.decodeSelfAuth(tokenString)
+	}
 	return d.decodeProduction(tokenString)
+}
+
+func (d *JWTDecoder) decodeSelfAuth(tokenString string) (*Claims, error) {
+	token, err := jwt.Parse(tokenString, func(_ *jwt.Token) (interface{}, error) {
+		return d.selfAuthKey, nil
+	},
+		jwt.WithValidMethods([]string{"HS256"}),
+		jwt.WithIssuer(d.selfAuthIssuer),
+		jwt.WithAudience(d.selfAuthAud),
+	)
+	if err != nil {
+		return nil, fmt.Errorf("selfauth token validation failed: %w", err)
+	}
+	claims, ok := token.Claims.(jwt.MapClaims)
+	if !ok {
+		return nil, fmt.Errorf("invalid claims type")
+	}
+	return extractClaims(claims), nil
 }
 
 func (d *JWTDecoder) decodeLocal(tokenString string) (*Claims, error) {

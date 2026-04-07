@@ -16,7 +16,7 @@ import (
 	"github.com/siigofiscal/go_backend/internal/db"
 	"github.com/siigofiscal/go_backend/internal/domain/auth"
 	"github.com/siigofiscal/go_backend/internal/domain/crud"
-	cognitoinfra "github.com/siigofiscal/go_backend/internal/infra/cognito"
+	"github.com/siigofiscal/go_backend/internal/domain/port"
 	"github.com/siigofiscal/go_backend/internal/model/control"
 	"github.com/siigofiscal/go_backend/internal/model/tenant"
 	"github.com/siigofiscal/go_backend/internal/response"
@@ -25,14 +25,14 @@ import (
 var emailRegex = regexp.MustCompile(`^[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}$`)
 
 type User struct {
-	cfg        *config.Config
-	database   *db.Database
-	cognito    *cognitoinfra.Client
-	jwtDecoder *auth.JWTDecoder
+	cfg      *config.Config
+	database *db.Database
+	idp      port.IdentityProvider
+	jwt      *auth.JWTDecoder
 }
 
-func NewUser(cfg *config.Config, database *db.Database, cognito *cognitoinfra.Client, jwtDecoder *auth.JWTDecoder) *User {
-	return &User{cfg: cfg, database: database, cognito: cognito, jwtDecoder: jwtDecoder}
+func NewUser(cfg *config.Config, database *db.Database, idp port.IdentityProvider, jwtDecoder *auth.JWTDecoder) *User {
+	return &User{cfg: cfg, database: database, idp: idp, jwt: jwtDecoder}
 }
 
 // Auth handles POST /api/User/auth — Cognito auth flow.
@@ -58,7 +58,7 @@ func (h *User) Auth(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	out, err := h.cognito.InitiateAuth(r.Context(), req.Flow, req.Params)
+	out, err := h.idp.InitiateAuth(r.Context(), req.Flow, req.Params)
 	if err != nil {
 		response.Forbidden(w, err.Error())
 		return
@@ -67,23 +67,17 @@ func (h *User) Auth(w http.ResponseWriter, r *http.Request) {
 	if out.ChallengeName != "" {
 		response.WriteJSON(w, 428, map[string]string{
 			"state":             "need_cognito_challenge",
-			"challenge_name":    string(out.ChallengeName),
-			"challenge_session": derefStr(out.Session),
+			"challenge_name":    out.ChallengeName,
+			"challenge_session": out.ChallengeSession,
 		})
 		return
 	}
 
-	if out.AuthenticationResult == nil {
+	if out.Tokens == nil {
 		response.Forbidden(w, "no authentication result")
 		return
 	}
-	response.WriteJSON(w, http.StatusOK, map[string]interface{}{
-		"AccessToken":  derefStr(out.AuthenticationResult.AccessToken),
-		"IdToken":      derefStr(out.AuthenticationResult.IdToken),
-		"RefreshToken": derefStr(out.AuthenticationResult.RefreshToken),
-		"ExpiresIn":    out.AuthenticationResult.ExpiresIn,
-		"TokenType":    derefStr(out.AuthenticationResult.TokenType),
-	})
+	response.WriteJSON(w, http.StatusOK, out.Tokens)
 }
 
 // AuthByCode handles GET /api/User/auth/{code} — OAuth2 code exchange.
@@ -145,23 +139,17 @@ func (h *User) AuthChallenge(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	out, err := h.cognito.RespondToAuthChallenge(r.Context(), req.ChallengeName, req.ChallengeSession, req.Email, req.Password)
+	out, err := h.idp.RespondToAuthChallenge(r.Context(), req.ChallengeName, req.ChallengeSession, req.Email, req.Password)
 	if err != nil {
 		response.Forbidden(w, err.Error())
 		return
 	}
 
-	if out.AuthenticationResult == nil {
+	if out.Tokens == nil {
 		response.Forbidden(w, "no authentication result")
 		return
 	}
-	response.WriteJSON(w, http.StatusOK, map[string]interface{}{
-		"AccessToken":  derefStr(out.AuthenticationResult.AccessToken),
-		"IdToken":      derefStr(out.AuthenticationResult.IdToken),
-		"RefreshToken": derefStr(out.AuthenticationResult.RefreshToken),
-		"ExpiresIn":    out.AuthenticationResult.ExpiresIn,
-		"TokenType":    derefStr(out.AuthenticationResult.TokenType),
-	})
+	response.WriteJSON(w, http.StatusOK, out.Tokens)
 }
 
 // CreateUser handles POST /api/User/ — signup flow.
@@ -198,12 +186,11 @@ func (h *User) CreateUser(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Create Cognito user (or local mock)
 	var cognitoSub string
 	if h.cfg.LocalInfra {
 		cognitoSub = "local-signup-" + strings.ReplaceAll(req.Email, "@", "-")
 	} else {
-		cognitoSub, err = h.cognito.SignUp(ctx, req.Email, req.Password)
+		cognitoSub, err = h.idp.SignUp(ctx, req.Email, req.Password)
 		if err != nil {
 			response.Forbidden(w, err.Error())
 			return
@@ -314,7 +301,7 @@ func (h *User) ChangePassword(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	_, err = h.cognito.ChangePassword(r.Context(), accessToken, req.CurrentPassword, req.NewPassword)
+	err = h.idp.ChangePassword(r.Context(), accessToken, req.CurrentPassword, req.NewPassword)
 	if err != nil {
 		response.Forbidden(w, err.Error())
 		return
@@ -337,12 +324,12 @@ func (h *User) Forgot(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	out, err := h.cognito.ForgotPassword(r.Context(), req.Email)
+	out, err := h.idp.ForgotPassword(r.Context(), req.Email)
 	if err != nil {
 		response.Forbidden(w, err.Error())
 		return
 	}
-	response.WriteJSON(w, http.StatusOK, out.CodeDeliveryDetails)
+	response.WriteJSON(w, http.StatusOK, out)
 }
 
 // ConfirmForgot handles POST /api/User/confirm_forgot.
@@ -362,7 +349,7 @@ func (h *User) ConfirmForgot(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	_, err = h.cognito.ConfirmForgotPassword(r.Context(), req.Email, req.VerificationCode, req.NewPassword)
+	err = h.idp.ConfirmForgotPassword(r.Context(), req.Email, req.VerificationCode, req.NewPassword)
 	if err != nil {
 		response.BadRequest(w, err.Error())
 		return
@@ -513,7 +500,7 @@ func (h *User) SuperInvite(w http.ResponseWriter, r *http.Request) {
 			cognitoSub = "local-invite-" + strings.ReplaceAll(req.Email, "@", "-")
 		} else {
 			var createErr error
-			cognitoSub, createErr = h.cognito.AdminCreateUser(ctx, req.Email, randomPassword())
+			cognitoSub, createErr = h.idp.AdminCreateUser(ctx, req.Email, randomPassword())
 			if createErr != nil {
 				response.Forbidden(w, createErr.Error())
 				return
@@ -702,7 +689,7 @@ func (h *User) getUserAccess(ctx context.Context, database *db.Database, user *c
 }
 
 func (h *User) linkToDB(ctx context.Context, database *db.Database, idToken string) {
-	claims, err := h.jwtDecoder.Decode(idToken)
+	claims, err := h.jwt.Decode(idToken)
 	if err != nil {
 		return
 	}
@@ -732,6 +719,9 @@ func (h *User) linkToDB(ctx context.Context, database *db.Database, idToken stri
 }
 
 func (h *User) exchangeCodeForTokens(code string) (map[string]interface{}, error) {
+	if h.cfg.CognitoURL == "" || h.cfg.CognitoURL == "https://placeholder.auth.example.com" {
+		return nil, fmt.Errorf("OAuth2 code exchange not configured (no COGNITO_URL / OIDC_TOKEN_URL)")
+	}
 	data := url.Values{
 		"grant_type":   {"authorization_code"},
 		"client_id":    {h.cfg.CognitoClientID},

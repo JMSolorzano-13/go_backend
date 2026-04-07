@@ -41,7 +41,6 @@ jobs:
         with:
           creds: ${{ secrets.AZURE_CREDENTIALS }}
 
-      # #region agent log
       - name: Validate Actions variables (ACR / RG / Container App)
         run: |
           missing=""
@@ -53,7 +52,6 @@ jobs:
             echo "::notice::Add them under Settings → Secrets and variables → Actions → Variables (not Secrets). Values: terraform output -json registry / resource_group_name / compute (container app name)."
             exit 1
           fi
-      # #endregion
 
       - name: Derive image tag
         id: tag

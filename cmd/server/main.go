@@ -20,6 +20,7 @@ import (
 	cognitoinfra "github.com/siigofiscal/go_backend/internal/infra/cognito"
 	"github.com/siigofiscal/go_backend/internal/infra/jwks"
 	s3infra "github.com/siigofiscal/go_backend/internal/infra/s3"
+	"github.com/siigofiscal/go_backend/internal/infra/selfauth"
 	sqsinfra "github.com/siigofiscal/go_backend/internal/infra/sqs"
 	"github.com/siigofiscal/go_backend/internal/logger"
 	"github.com/siigofiscal/go_backend/internal/server"
@@ -47,6 +48,15 @@ func main() {
 	}
 	defer database.Close()
 	slog.Warn("database connected", "host", cfg.DBHost, "db", cfg.DBName)
+
+	if os.Getenv("RUN_MIGRATIONS") == "1" {
+		sqlDB := database.Primary.DB
+		if err := db.RunMigrations(context.Background(), sqlDB); err != nil {
+			slog.Error("migrations failed", "error", err)
+			os.Exit(1)
+		}
+		slog.Warn("migrations: completed")
+	}
 
 	var files port.FileStorage
 	var msgPub port.MessagePublisher
@@ -95,15 +105,32 @@ func main() {
 
 	slog.Warn("object_storage", "cloud_provider", cfg.CloudProvider, "certs_bucket", cfg.S3Certs)
 
-	cognitoClient, err := cognitoinfra.NewClient(cfg)
-	if err != nil {
-		slog.Error("cognito: client init failed", "error", err)
-		os.Exit(1)
-	}
-	slog.Warn("cognito: initialized", "pool_id", cfg.CognitoUserPoolID)
+	var idp port.IdentityProvider
+	var jwtDecoder *auth.JWTDecoder
 
-	jwtDecoder := auth.NewJWTDecoder(cfg, &jwks.HTTPFetcher{})
-	handler := server.New(cfg, database, bus, files, cognitoClient, jwtDecoder)
+	switch cfg.CloudProvider {
+	case "azure":
+		sa := selfauth.New(selfauth.Config{
+			DB:         database.Primary,
+			SigningKey: cfg.SelfAuthSigningKey,
+			Issuer:     "solucioncp-selfauth",
+			Audience:   "solucioncp",
+		})
+		idp = sa
+		jwtDecoder = auth.NewJWTDecoderSelfAuth(cfg, sa.SigningKey(), sa.Issuer(), sa.Audience())
+		slog.Warn("identity_provider: selfauth (azure)", "issuer", sa.Issuer())
+	default:
+		cognitoClient, err := cognitoinfra.NewClient(cfg)
+		if err != nil {
+			slog.Error("cognito: client init failed", "error", err)
+			os.Exit(1)
+		}
+		idp = cognitoinfra.NewAdapter(cognitoClient)
+		jwtDecoder = auth.NewJWTDecoder(cfg, &jwks.HTTPFetcher{})
+		slog.Warn("identity_provider: cognito", "pool_id", cfg.CognitoUserPoolID)
+	}
+
+	handler := server.New(cfg, database, bus, files, idp, jwtDecoder)
 
 	srv := &http.Server{
 		Addr:         ":8001",
