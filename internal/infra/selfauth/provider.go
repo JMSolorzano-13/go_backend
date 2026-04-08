@@ -5,7 +5,6 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"fmt"
-	"log/slog"
 	"strings"
 	"time"
 
@@ -89,26 +88,14 @@ func (p *Provider) passwordAuth(ctx context.Context, email, password string) (*p
 	var u userRow
 	err := p.db.NewSelect().Model(&u).Where("lower(trim(email)) = ?", email).Limit(1).Scan(ctx)
 	if err != nil {
-		// #region agent log
-		debugLog("28c9f7", "selfauth/provider.go:passwordAuth", "user_not_found", map[string]any{"email": email, "err": err.Error()})
-		// #endregion
 		return nil, fmt.Errorf("invalid credentials")
 	}
 	if u.PasswordHash == nil || *u.PasswordHash == "" {
-		// #region agent log
-		debugLog("28c9f7", "selfauth/provider.go:passwordAuth", "password_hash_null", map[string]any{"email": email, "user_id": u.ID})
-		// #endregion
 		return nil, fmt.Errorf("password not set for this account")
 	}
 	if err := bcrypt.CompareHashAndPassword([]byte(*u.PasswordHash), []byte(password)); err != nil {
-		// #region agent log
-		debugLog("28c9f7", "selfauth/provider.go:passwordAuth", "bcrypt_mismatch", map[string]any{"email": email, "user_id": u.ID})
-		// #endregion
 		return nil, fmt.Errorf("invalid credentials")
 	}
-	// #region agent log
-	debugLog("28c9f7", "selfauth/provider.go:passwordAuth", "auth_success", map[string]any{"email": email, "user_id": u.ID})
-	// #endregion
 	tokens, err := p.issueTokens(u)
 	if err != nil {
 		return nil, err
@@ -338,10 +325,3 @@ func generateSecureKey() string {
 
 // GenerateSigningKey returns a 64-char hex key for use as SELFAUTH_SIGNING_KEY.
 func GenerateSigningKey() string { return generateSecureKey() }
-
-// #region agent log
-func debugLog(session, location, message string, data map[string]any) {
-	slog.Warn("[debug-"+session+"] "+message, "location", location, "data", data)
-}
-
-// #endregion
