@@ -355,9 +355,12 @@ func (h *SATQuery) canRequestManualSync(
 	resp["all_cfdis_processed"] = incompleteCFDIs == 0
 
 	todayStart := todayMXInUTC()
+	// Match Python ManualRequestVerifier: daily limit counts manual METADATA only
+	// (not every manual CFDI chunk).
 	manualToday, _ := conn.NewSelect().
 		Model((*tenant.SATQuery)(nil)).
 		Where("is_manual = true").
+		Where("request_type = ?", "METADATA").
 		Where("created_at >= ?", todayStart).
 		Count(ctx)
 
@@ -372,10 +375,15 @@ func (h *SATQuery) canRequestManualSync(
 		return resp
 	}
 
+	// Match Python: only manual METADATA rows in non-final states from the last 2h block
+	// the UI. Automatic CFDI/METADATA chunks (company create, generators) must not
+	// disable "Descarga manual".
 	twoHoursAgo := time.Now().UTC().Add(-2 * time.Hour)
 	inProgress, _ := conn.NewSelect().
 		Model((*tenant.SATQuery)(nil)).
-		Where("state NOT IN (?)", bun.In(finalStates)).
+		Where("is_manual = true").
+		Where("request_type = ?", "METADATA").
+		Where("state NOT IN (?)", bun.In(manualSyncFinalStates)).
 		Where("created_at >= ?", twoHoursAgo).
 		Count(ctx)
 	if inProgress > 0 {
@@ -696,6 +704,13 @@ var finalStates = []string{
 	"INFORMATION_NOT_FOUND", "SUBSTITUTED", "SCRAPPED",
 	"ERROR_IN_CERTS", "ERROR_SAT_WS_UNKNOWN", "ERROR_SAT_WS_INTERNAL",
 	"ERROR_TOO_BIG", "SCRAP_FAILED",
+}
+
+// manualSyncFinalStates matches Python FinalStates in query_state.py — used only for
+// the "manual METADATA in progress" guard on can_manual_request / Descarga manual.
+var manualSyncFinalStates = []string{
+	"PROCESSED", "ERROR", "CANT_SCRAP", "SPLITTED", "INFORMATION_NOT_FOUND",
+	"MANUALLY_CANCELLED", "SCRAP_FAILED", "TIME_LIMIT_REACHED", "SUBSTITUTED", "SUBSTITUTED_TO_SCRAP",
 }
 
 var reVerifyStates = []string{"SENT", "TIME_LIMIT_REACHED"}
