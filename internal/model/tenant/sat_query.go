@@ -14,11 +14,31 @@ const (
 	RequestTypeMetadata = "METADATA"
 	RequestTypeCFDI     = "CFDI"
 
+	// Temporary states
 	QueryStateDraft      = "DRAFT"
 	QueryStateSent       = "SENT"
+	QueryStateToDownload = "TO_DOWNLOAD"
+	QueryStateDownloaded = "DOWNLOADED"
+	QueryStateDelayed    = "DELAYED"
 	QueryStateProcessing = "PROCESSING"
-	QueryStateCompleted  = "COMPLETED"
-	QueryStateError      = "ERROR"
+
+	// Final error states
+	QueryStateErrorInCerts       = "ERROR_IN_CERTS"
+	QueryStateErrorSATWSUnknown  = "ERROR_SAT_WS_UNKNOWN"
+	QueryStateErrorSATWSInternal = "ERROR_SAT_WS_INTERNAL"
+	QueryStateErrorTooBig        = "ERROR_TOO_BIG"
+	QueryStateTimeLimitReached   = "TIME_LIMIT_REACHED"
+	QueryStateError              = "ERROR"
+	QueryStateManuallyCancelled  = "MANUALLY_CANCELLED"
+
+	// Final non-success states
+	QueryStateSplitted            = "SPLITTED"
+	QueryStateInformationNotFound = "INFORMATION_NOT_FOUND"
+	QueryStateSubstituted         = "SUBSTITUTED"
+
+	// Final success states
+	QueryStateProcessed = "PROCESSED"
+	QueryStateCompleted = "COMPLETED"
 
 	SATTechWebService = "WebService"
 	SATTechScraper    = "Scraper"
