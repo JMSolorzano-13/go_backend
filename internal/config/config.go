@@ -27,9 +27,11 @@ type Config struct {
 	RegionName         string
 
 	// Cloud / Azure (Phase 1E)
-	// CloudProvider: "aws" (default, S3 + SQS) or "azure" (Blob + Queue Storage via connection string).
-	CloudProvider                string
-	AzureStorageConnectionString string
+	// CloudProvider: "aws" (default, S3 + SQS) or "azure" (Blob + Service Bus publish when
+	// AZURE_SERVICEBUS_CONNECTION_STRING is set; else Storage Queues for Azurite-only).
+	CloudProvider                   string
+	AzureStorageConnectionString    string
+	AzureServiceBusConnectionString string
 
 	// Self-managed auth (azure mode): HS256 signing key for JWTs.
 	SelfAuthSigningKey string
@@ -220,7 +222,10 @@ func Load() (*Config, error) {
 
 		CloudProvider:                strings.ToLower(strings.TrimSpace(envOr("CLOUD_PROVIDER", "aws"))),
 		AzureStorageConnectionString: os.Getenv("AZURE_STORAGE_CONNECTION_STRING"),
-		SelfAuthSigningKey:           envOr("SELFAUTH_SIGNING_KEY", "change-me-in-production-use-a-64-char-hex-key-from-key-vault!!"),
+		// Service Bus namespace connection string (Send). Required for Azure SAT/event publishing
+		// when queues are azurerm_servicebus_queue (not Storage Queues).
+		AzureServiceBusConnectionString: strings.TrimSpace(os.Getenv("AZURE_SERVICEBUS_CONNECTION_STRING")),
+		SelfAuthSigningKey:              envOr("SELFAUTH_SIGNING_KEY", "change-me-in-production-use-a-64-char-hex-key-from-key-vault!!"),
 
 		S3AccessKey:           mustEnv("S3_ACCESS_KEY"),
 		S3SecretKey:           mustEnv("S3_SECRET_KEY"),

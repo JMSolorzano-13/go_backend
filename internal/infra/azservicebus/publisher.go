@@ -1,5 +1,6 @@
-// Package azservicebus implements port.MessagePublisher for Azure Queue Storage
-// (Azurite-compatible). Production Azure Service Bus is a separate mapping (Phase 3).
+// Package azservicebus implements port.MessagePublisher for Azure Storage Queues
+// (blob account Queue service; Azurite-compatible). For CLOUD_PROVIDER=azure against
+// Terraform Service Bus queues, use internal/infra/azsbpub with AZURE_SERVICEBUS_CONNECTION_STRING.
 package azservicebus
 
 import (

@@ -16,6 +16,7 @@ import (
 	"github.com/siigofiscal/go_backend/internal/domain/event"
 	"github.com/siigofiscal/go_backend/internal/domain/port"
 	azblobinfra "github.com/siigofiscal/go_backend/internal/infra/azblob"
+	"github.com/siigofiscal/go_backend/internal/infra/azsbpub"
 	azqueues "github.com/siigofiscal/go_backend/internal/infra/azservicebus"
 	cognitoinfra "github.com/siigofiscal/go_backend/internal/infra/cognito"
 	"github.com/siigofiscal/go_backend/internal/infra/jwks"
@@ -97,13 +98,22 @@ func main() {
 			}
 			msgPub = sqsinfra.Publisher{Client: sqsc}
 			slog.Warn("hybrid_local_sat: blob=azurite sqs=localstack fiel_mirror=s3 (Python SAT worker)")
+		} else if cfg.AzureServiceBusConnectionString != "" {
+			sb, err := azsbpub.NewPublisher(cfg.AzureServiceBusConnectionString)
+			if err != nil {
+				slog.Error("azure service bus publisher init failed", "error", err)
+				os.Exit(1)
+			}
+			msgPub = sb
+			slog.Warn("message_publisher: azure service bus (SAT/events → Terraform queues)")
 		} else {
 			qp, err := azqueues.NewQueuePublisher(cfg.AzureStorageConnectionString)
 			if err != nil {
-				slog.Error("azure queue publisher init failed", "error", err)
+				slog.Error("azure storage queue publisher init failed", "error", err)
 				os.Exit(1)
 			}
 			msgPub = qp
+			slog.Warn("message_publisher: azure storage queues (Azurite); not Service Bus — set AZURE_SERVICEBUS_CONNECTION_STRING for ACA/Terraform SB")
 		}
 	default:
 		s3c, err := s3infra.NewClient(cfg)
