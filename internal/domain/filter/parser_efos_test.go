@@ -2,6 +2,15 @@ package filter
 
 import "testing"
 
+func BenchmarkBuildConditionSQL_efosAny(b *testing.B) {
+	for b.Loop() {
+		_, _, err := buildConditionSQL([]interface{}{"efos", "=", "any"})
+		if err != nil {
+			b.Fatal(err)
+		}
+	}
+}
+
 func TestBuildConditionSQL_efosAny(t *testing.T) {
 	t.Parallel()
 	sql, args, err := buildConditionSQL([]interface{}{"efos", "=", "any"})

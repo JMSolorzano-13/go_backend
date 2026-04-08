@@ -5,6 +5,8 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"fmt"
+	"log/slog"
+	"strings"
 	"time"
 
 	"github.com/golang-jwt/jwt/v5"
@@ -33,6 +35,10 @@ type Config struct {
 	Audience   string
 	TokenTTL   time.Duration
 	RefreshTTL time.Duration
+}
+
+func normEmail(s string) string {
+	return strings.TrimSpace(strings.ToLower(s))
 }
 
 func New(cfg Config) *Provider {
@@ -79,17 +85,30 @@ func (p *Provider) InitiateAuth(ctx context.Context, flow string, params map[str
 }
 
 func (p *Provider) passwordAuth(ctx context.Context, email, password string) (*port.InitiateAuthResult, error) {
+	email = normEmail(email)
 	var u userRow
-	err := p.db.NewSelect().Model(&u).Where("email = ?", email).Limit(1).Scan(ctx)
+	err := p.db.NewSelect().Model(&u).Where("lower(trim(email)) = ?", email).Limit(1).Scan(ctx)
 	if err != nil {
+		// #region agent log
+		debugLog("28c9f7", "selfauth/provider.go:passwordAuth", "user_not_found", map[string]any{"email": email, "err": err.Error()})
+		// #endregion
 		return nil, fmt.Errorf("invalid credentials")
 	}
 	if u.PasswordHash == nil || *u.PasswordHash == "" {
+		// #region agent log
+		debugLog("28c9f7", "selfauth/provider.go:passwordAuth", "password_hash_null", map[string]any{"email": email, "user_id": u.ID})
+		// #endregion
 		return nil, fmt.Errorf("password not set for this account")
 	}
 	if err := bcrypt.CompareHashAndPassword([]byte(*u.PasswordHash), []byte(password)); err != nil {
+		// #region agent log
+		debugLog("28c9f7", "selfauth/provider.go:passwordAuth", "bcrypt_mismatch", map[string]any{"email": email, "user_id": u.ID})
+		// #endregion
 		return nil, fmt.Errorf("invalid credentials")
 	}
+	// #region agent log
+	debugLog("28c9f7", "selfauth/provider.go:passwordAuth", "auth_success", map[string]any{"email": email, "user_id": u.ID})
+	// #endregion
 	tokens, err := p.issueTokens(u)
 	if err != nil {
 		return nil, err
@@ -123,6 +142,7 @@ func (p *Provider) RespondToAuthChallenge(_ context.Context, _, _, _, _ string) 
 }
 
 func (p *Provider) SignUp(ctx context.Context, email, password string) (string, error) {
+	email = normEmail(email)
 	hash, err := bcrypt.GenerateFromPassword([]byte(password), bcrypt.DefaultCost)
 	if err != nil {
 		return "", fmt.Errorf("hash password: %w", err)
@@ -132,7 +152,7 @@ func (p *Provider) SignUp(ctx context.Context, email, password string) (string, 
 	_, err = p.db.NewUpdate().TableExpr(`"user"`).
 		Set("password_hash = ?", hashStr).
 		Set("cognito_sub = ?", sub).
-		Where("email = ?", email).
+		Where("lower(trim(email)) = ?", email).
 		Exec(ctx)
 	if err != nil {
 		return "", fmt.Errorf("update user password: %w", err)
@@ -179,6 +199,7 @@ func (p *Provider) ForgotPassword(_ context.Context, email string) (*port.CodeDe
 }
 
 func (p *Provider) ConfirmForgotPassword(ctx context.Context, email, _ /*verificationCode*/, newPassword string) error {
+	email = normEmail(email)
 	hash, err := bcrypt.GenerateFromPassword([]byte(newPassword), bcrypt.DefaultCost)
 	if err != nil {
 		return fmt.Errorf("hash password: %w", err)
@@ -186,7 +207,7 @@ func (p *Provider) ConfirmForgotPassword(ctx context.Context, email, _ /*verific
 	hashStr := string(hash)
 	res, err := p.db.NewUpdate().TableExpr(`"user"`).
 		Set("password_hash = ?", hashStr).
-		Where("email = ?", email).
+		Where("lower(trim(email)) = ?", email).
 		Exec(ctx)
 	if err != nil {
 		return err
@@ -199,6 +220,7 @@ func (p *Provider) ConfirmForgotPassword(ctx context.Context, email, _ /*verific
 }
 
 func (p *Provider) AdminCreateUser(ctx context.Context, email, tempPassword string) (string, error) {
+	email = normEmail(email)
 	hash, err := bcrypt.GenerateFromPassword([]byte(tempPassword), bcrypt.DefaultCost)
 	if err != nil {
 		return "", fmt.Errorf("hash password: %w", err)
@@ -208,7 +230,7 @@ func (p *Provider) AdminCreateUser(ctx context.Context, email, tempPassword stri
 	_, err = p.db.NewUpdate().TableExpr(`"user"`).
 		Set("password_hash = ?", hashStr).
 		Set("cognito_sub = ?", sub).
-		Where("email = ?", email).
+		Where("lower(trim(email)) = ?", email).
 		Exec(ctx)
 	if err != nil {
 		return "", err
@@ -316,3 +338,10 @@ func generateSecureKey() string {
 
 // GenerateSigningKey returns a 64-char hex key for use as SELFAUTH_SIGNING_KEY.
 func GenerateSigningKey() string { return generateSecureKey() }
+
+// #region agent log
+func debugLog(session, location, message string, data map[string]any) {
+	slog.Warn("[debug-"+session+"] "+message, "location", location, "data", data)
+}
+
+// #endregion

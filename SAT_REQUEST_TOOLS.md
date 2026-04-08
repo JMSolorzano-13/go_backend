@@ -151,11 +151,13 @@ go build -o bin/sat-request-generator ./cmd/sat_request_generator
 
 ## Configuration
 
-All configuration is hardcoded for local development:
+**Go API (`./start-local.sh` default):** With `CLOUD_PROVIDER=azure`, `LOCAL_INFRA=1`, and `AWS_ENDPOINT_URL=http://localhost:4566` in `fastapi_backend/.env`, the server uses **hybrid local SAT mode**: FIEL primary storage is **Azurite blob**, but `COMPANY_CREATED` / bus events publish to **LocalStack SQS**, and new uploads **mirror** cer/key/txt to **LocalStack S3** so `backend/local_sqs_worker_clean.py` can create and verify `sat_query` rows. Ensure `./start-local.sh` has started the Python SAT workers (automatic in the Go path when Poetry + `backend/` exist).
+
+**sat-request-generator** (this tool) still talks directly to LocalStack:
 - DB: `postgresql://solcpuser:local_dev_password@localhost:5432/ezaudita_db?sslmode=disable`
 - SQS Endpoint: `http://localhost:4566`
 - Queue URL: `http://localhost:4566/000000000000/queue_create_query`
-- S3 Bucket: `solucioncp-certs-local`
+- S3 Bucket: `solucioncp-certs-local` (mirror must exist after company create via Go hybrid mode, or upload certs to S3 separately)
 
 ## Future Enhancements
 

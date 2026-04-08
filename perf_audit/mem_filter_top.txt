@@ -1,0 +1,26 @@
+File: filter.test
+Type: alloc_space
+Time: 2026-04-07 10:19:33 -05
+Showing nodes accounting for 4203.60kB, 100% of 4203.60kB total
+Showing top 20 nodes out of 30
+      flat  flat%   sum%        cum   cum%
+ 1762.94kB 41.94% 41.94%  1762.94kB 41.94%  runtime/pprof.StartCPUProfile
+    1026kB 24.41% 66.35%     1026kB 24.41%  runtime.mallocgc
+  902.59kB 21.47% 87.82%   902.59kB 21.47%  compress/flate.NewWriter (inline)
+  512.08kB 12.18%   100%   512.08kB 12.18%  regexp.compile
+         0     0%   100%   902.59kB 21.47%  compress/gzip.(*Writer).Write
+         0     0%   100%   512.08kB 12.18%  github.com/jinzhu/inflection.compile
+         0     0%   100%   512.08kB 12.18%  github.com/jinzhu/inflection.init.0
+         0     0%   100%  1762.94kB 41.94%  main.main
+         0     0%   100%   512.08kB 12.18%  regexp.Compile (inline)
+         0     0%   100%   512.08kB 12.18%  regexp.MustCompile
+         0     0%   100%     1026kB 24.41%  runtime.allocm
+         0     0%   100%   512.08kB 12.18%  runtime.doInit (inline)
+         0     0%   100%   512.08kB 12.18%  runtime.doInit1
+         0     0%   100%  2275.01kB 54.12%  runtime.main
+         0     0%   100%      513kB 12.20%  runtime.mcall
+         0     0%   100%      513kB 12.20%  runtime.mstart
+         0     0%   100%      513kB 12.20%  runtime.mstart0
+         0     0%   100%      513kB 12.20%  runtime.mstart1
+         0     0%   100%     1026kB 24.41%  runtime.newm
+         0     0%   100%     1026kB 24.41%  runtime.newobject

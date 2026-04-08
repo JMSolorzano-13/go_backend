@@ -396,16 +396,19 @@ Implement `internal/infra/selfauth/Provider` — bcrypt password hashing + self-
 **Status**: Accepted
 
 **Context**:
-The Go Docker image doesn't ship Python/Poetry. Company creation shelled out to `run_tenant_migration.sh` which required the `fastapi_backend` directory.
+The Go Docker image doesn't ship Python/Poetry. Company creation must apply per-company tenant DDL without runtime dependency on `fastapi_backend`.
 
 **Decision**:
 Embedded SQL migrations in `internal/db/migrations/*.sql` with a lightweight runner (`internal/db/migrate.go`). Control schema DDL derived from Alembic head. Runs on startup when `RUN_MIGRATIONS=1`.
+
+Per-tenant DDL is embedded as `internal/db/tenant_schema/tenant_tables.sql` (placeholder `__TENANT_SCHEMA_QUOTED__`), applied by `db.ApplyEmbeddedTenantDDL` on company create. Regenerate that file with `go_backend/scripts/regenerate_tenant_tables_sql.sh` when `chalicelib/alembic_tenant` head changes (script uses FastAPI/Alembic only as a **generator**, not at runtime).
 
 **Rationale**:
 - Zero Python dependency in the Go container image
 - Idempotent (`CREATE TABLE IF NOT EXISTS`, `CREATE INDEX IF NOT EXISTS`)
 - `schema_migrations` table tracks applied versions
-- Tenant schema migrations can be added as numbered SQL files
+- Tenant schema snapshot stays versioned beside the Go code
+- Migration `002` loads SAT catalog reference data from embedded CSV (`internal/db/seeddata/`), matching Alembic data revisions `bef098e1f688` and `84c3a8e301b6`
 
 ---
 

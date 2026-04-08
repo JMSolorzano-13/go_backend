@@ -1,0 +1,6 @@
+File: handler.test
+Type: cpu
+Time: 2026-04-07 10:20:44 -05
+Duration: 202.51ms, Total samples = 0 
+Showing nodes accounting for 0, 0% of 0 total
+      flat  flat%   sum%        cum   cum%

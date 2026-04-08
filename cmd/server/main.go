@@ -60,6 +60,7 @@ func main() {
 
 	var files port.FileStorage
 	var msgPub port.MessagePublisher
+	var certMirror port.FileStorage
 
 	switch cfg.CloudProvider {
 	case "azure":
@@ -73,12 +74,37 @@ func main() {
 			os.Exit(1)
 		}
 		files = blobc
-		qp, err := azqueues.NewQueuePublisher(cfg.AzureStorageConnectionString)
-		if err != nil {
-			slog.Error("azure queue publisher init failed", "error", err)
-			os.Exit(1)
+
+		// Local dev: keep FIEL on Azurite blob (Go) but publish SAT bus events to LocalStack SQS and
+		// mirror cer/key/txt to LocalStack S3 so backend/local_sqs_worker_clean.py can run the SAT pipeline.
+		hybridLocalSAT := cfg.LocalInfra && cfg.AWSEndpointURL != ""
+		if hybridLocalSAT {
+			s3c, err := s3infra.NewClient(cfg)
+			if err != nil {
+				slog.Error("s3: hybrid local SAT mirror init failed", "error", err)
+				os.Exit(1)
+			}
+			certMirror = s3infra.FileStorageAdapter{Client: s3c}
+			sqsc, err := sqsinfra.NewClient(
+				cfg.RegionName,
+				cfg.AWSEndpointURL,
+				cfg.AWSAccessKeyID,
+				cfg.AWSSecretAccessKey,
+			)
+			if err != nil {
+				slog.Error("sqs: hybrid local SAT publisher init failed", "error", err)
+				os.Exit(1)
+			}
+			msgPub = sqsinfra.Publisher{Client: sqsc}
+			slog.Warn("hybrid_local_sat: blob=azurite sqs=localstack fiel_mirror=s3 (Python SAT worker)")
+		} else {
+			qp, err := azqueues.NewQueuePublisher(cfg.AzureStorageConnectionString)
+			if err != nil {
+				slog.Error("azure queue publisher init failed", "error", err)
+				os.Exit(1)
+			}
+			msgPub = qp
 		}
-		msgPub = qp
 	default:
 		s3c, err := s3infra.NewClient(cfg)
 		if err != nil {
@@ -130,7 +156,7 @@ func main() {
 		slog.Warn("identity_provider: cognito", "pool_id", cfg.CognitoUserPoolID)
 	}
 
-	handler := server.New(cfg, database, bus, files, idp, jwtDecoder)
+	handler := server.New(cfg, database, bus, files, certMirror, idp, jwtDecoder)
 
 	srv := &http.Server{
 		Addr:         ":8001",

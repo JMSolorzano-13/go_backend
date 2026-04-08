@@ -1,0 +1,21 @@
+File: filter.test
+Type: cpu
+Time: 2026-04-07 10:21:30 -05
+Duration: 1.01s, Total samples = 740ms (73.22%)
+Showing nodes accounting for 740ms, 100% of 740ms total
+      flat  flat%   sum%        cum   cum%
+     570ms 77.03% 77.03%      580ms 78.38%  github.com/siigofiscal/go_backend/internal/domain/filter.buildConditionSQL
+     100ms 13.51% 90.54%      710ms 95.95%  github.com/siigofiscal/go_backend/internal/domain/filter.BenchmarkBuildConditionSQL_efosAny
+      30ms  4.05% 94.59%       30ms  4.05%  runtime.pthread_cond_signal
+      30ms  4.05% 98.65%       30ms  4.05%  testing.(*B).Loop (inline)
+      10ms  1.35%   100%       10ms  1.35%  runtime.asyncPreempt
+         0     0%   100%       30ms  4.05%  runtime.gopreempt_m (inline)
+         0     0%   100%       30ms  4.05%  runtime.goschedImpl
+         0     0%   100%       30ms  4.05%  runtime.morestack
+         0     0%   100%       30ms  4.05%  runtime.newstack
+         0     0%   100%       30ms  4.05%  runtime.notewakeup
+         0     0%   100%       30ms  4.05%  runtime.semawakeup
+         0     0%   100%       30ms  4.05%  runtime.startm
+         0     0%   100%       30ms  4.05%  runtime.wakep
+         0     0%   100%      710ms 95.95%  testing.(*B).run1.func1
+         0     0%   100%      710ms 95.95%  testing.(*B).runN

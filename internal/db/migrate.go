@@ -81,6 +81,13 @@ func RunMigrations(ctx context.Context, db *sql.DB) error {
 			tx.Rollback()
 			return fmt.Errorf("execute migration %s: %w", m.name, err)
 		}
+		// Reference catalog rows (embedded CSV); parity with Alembic bef098e1f688 + 84c3a8e301b6.
+		if m.version == "002" {
+			if err := SeedCatalogs(ctx, tx); err != nil {
+				tx.Rollback()
+				return fmt.Errorf("seed catalogs for %s: %w", m.name, err)
+			}
+		}
 		if _, err := tx.ExecContext(ctx, "INSERT INTO schema_migrations (version, name) VALUES ($1, $2)", m.version, m.name); err != nil {
 			tx.Rollback()
 			return fmt.Errorf("record migration %s: %w", m.name, err)

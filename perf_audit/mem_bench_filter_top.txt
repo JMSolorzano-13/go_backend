@@ -1,0 +1,26 @@
+File: filter.test
+Type: alloc_space
+Time: 2026-04-07 10:21:31 -05
+Showing nodes accounting for 7294.20kB, 100% of 7294.20kB total
+Showing top 20 nodes out of 44
+      flat  flat%   sum%        cum   cum%
+ 2570.27kB 35.24% 35.24%  2570.27kB 35.24%  runtime.mallocgc
+ 1184.27kB 16.24% 51.47%  1184.27kB 16.24%  runtime/pprof.StartCPUProfile
+  902.59kB 12.37% 63.85%  1485.59kB 20.37%  compress/flate.NewWriter (inline)
+  583.01kB  7.99% 71.84%   583.01kB  7.99%  compress/flate.newDeflateFast (inline)
+  516.01kB  7.07% 78.91%   516.01kB  7.07%  runtime/pprof.(*profMap).lookup
+     514kB  7.05% 85.96%  1026.01kB 14.07%  github.com/jinzhu/inflection.compile
+  512.05kB  7.02% 92.98%   512.05kB  7.02%  time.Sleep
+  512.01kB  7.02%   100%   512.01kB  7.02%  regexp/syntax.(*parser).push
+         0     0%   100%   583.01kB  7.99%  compress/flate.(*compressor).init
+         0     0%   100%  1485.59kB 20.37%  compress/gzip.(*Writer).Write
+         0     0%   100%  1026.01kB 14.07%  github.com/jinzhu/inflection.init.0
+         0     0%   100%  1184.27kB 16.24%  main.main
+         0     0%   100%   512.01kB  7.02%  regexp.Compile (inline)
+         0     0%   100%   512.01kB  7.02%  regexp.MustCompile
+         0     0%   100%   512.01kB  7.02%  regexp.compile
+         0     0%   100%   512.01kB  7.02%  regexp/syntax.(*parser).op
+         0     0%   100%   512.01kB  7.02%  regexp/syntax.Parse (inline)
+         0     0%   100%   512.01kB  7.02%  regexp/syntax.parse
+         0     0%   100%     1539kB 21.10%  runtime.allocm
+         0     0%   100%  1026.01kB 14.07%  runtime.doInit

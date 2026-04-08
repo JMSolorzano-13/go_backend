@@ -1,0 +1,31 @@
+File: handler.test
+Type: alloc_space
+Time: 2026-04-07 10:17:29 -05
+Showing nodes accounting for 10375.10kB, 100% of 10375.10kB total
+Showing top 25 nodes out of 55
+      flat  flat%   sum%        cum   cum%
+ 2947.21kB 28.41% 28.41%  2947.21kB 28.41%  runtime/trace.(*traceMultiplexer).startLocked
+ 2050.24kB 19.76% 48.17%  2050.24kB 19.76%  runtime.mallocgc
+ 1762.94kB 16.99% 65.16%  1762.94kB 16.99%  runtime/pprof.StartCPUProfile
+ 1037.41kB 10.00% 75.16%  1037.41kB 10.00%  regexp.onePassCopy
+  902.59kB  8.70% 83.86%  1553.21kB 14.97%  compress/flate.NewWriter (inline)
+  650.62kB  6.27% 90.13%   650.62kB  6.27%  compress/flate.(*compressor).init
+  512.05kB  4.94% 95.06%   512.05kB  4.94%  regexp/syntax.(*parser).newRegexp (inline)
+  512.05kB  4.94%   100%   512.05kB  4.94%  time.Sleep
+         0     0%   100%  1553.21kB 14.97%  compress/gzip.(*Writer).Write
+         0     0%   100%   513.31kB  4.95%  github.com/aws/aws-sdk-go-v2/service/s3/internal/endpoints.init
+         0     0%   100%   512.05kB  4.94%  github.com/jinzhu/inflection.compile
+         0     0%   100%   512.05kB  4.94%  github.com/jinzhu/inflection.init.0
+         0     0%   100%   524.09kB  5.05%  github.com/xuri/excelize/v2.init
+         0     0%   100%  4710.15kB 45.40%  main.main
+         0     0%   100%  1549.46kB 14.93%  regexp.Compile (inline)
+         0     0%   100%  1549.46kB 14.93%  regexp.MustCompile
+         0     0%   100%  1549.46kB 14.93%  regexp.compile
+         0     0%   100%  1037.41kB 10.00%  regexp.compileOnePass
+         0     0%   100%   512.05kB  4.94%  regexp/syntax.(*parser).literal
+         0     0%   100%   512.05kB  4.94%  regexp/syntax.Parse (inline)
+         0     0%   100%   512.05kB  4.94%  regexp/syntax.parse
+         0     0%   100%   512.01kB  4.93%  runtime.(*timer).maybeAdd
+         0     0%   100%   512.01kB  4.93%  runtime.(*timer).modify
+         0     0%   100%   512.01kB  4.93%  runtime.(*timer).reset
+         0     0%   100%   512.01kB  4.93%  runtime.(*timers).addHeap

@@ -1,0 +1,7 @@
+goos: darwin
+goarch: arm64
+pkg: github.com/siigofiscal/go_backend/internal/domain/filter
+cpu: Apple M4
+BenchmarkBuildConditionSQL_efosAny-10    	298837142	         3.017 ns/op
+PASS
+ok  	github.com/siigofiscal/go_backend/internal/domain/filter	1.688s

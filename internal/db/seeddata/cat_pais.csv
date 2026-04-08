@@ -1,0 +1,251 @@
+code|name
+ABW|Aruba
+AFG|Afganistán
+AGO|Angola
+AIA|Anguila
+ALA|Islas Åland
+ALB|Albania
+AND|Andorra
+ARE|Emiratos Árabes Unidos (Los)
+ARG|Argentina
+ARM|Armenia
+ASM|Samoa Americana
+ATA|Antártida
+ATF|Territorios Australes Franceses (los)
+ATG|Antigua y Barbuda
+AUS|Australia
+AUT|Austria
+AZE|Azerbaiyán
+BDI|Burundi
+BEL|Bélgica
+BEN|Benín
+BES|Bonaire, San Eustaquio y Saba
+BFA|Burkina Faso
+BGD|Bangladés
+BGR|Bulgaria
+BHR|Baréin
+BHS|Bahamas (las)
+BIH|Bosnia y Herzegovina
+BLM|San Bartolomé
+BLR|Bielorrusia
+BLZ|Belice
+BMU|Bermudas
+BOL|Bolivia, Estado Plurinacional de
+BRA|Brasil
+BRB|Barbados
+BRN|Brunéi Darussalam
+BTN|Bután
+BVT|Isla Bouvet
+BWA|Botsuana
+CAF|República Centroafricana (la)
+CAN|Canadá
+CCK|Islas Cocos (Keeling)
+CHE|Suiza
+CHL|Chile
+CHN|China
+CIV|Côte d'Ivoire
+CMR|Camerún
+COD|Congo (la República Democrática del)
+COG|Congo
+COK|Islas Cook (las)
+COL|Colombia
+COM|Comoras
+CPV|Cabo Verde
+CRI|Costa Rica
+CUB|Cuba
+CUW|Curaçao
+CXR|Isla de Navidad
+CYM|Islas Caimán (las)
+CYP|Chipre
+CZE|República Checa (la)
+DEU|Alemania
+DJI|Yibuti
+DMA|Dominica
+DNK|Dinamarca
+DOM|República Dominicana (la)
+DZA|Argelia
+ECU|Ecuador
+EGY|Egipto
+ERI|Eritrea
+ESH|Sahara Occidental
+ESP|España
+EST|Estonia
+ETH|Etiopía
+FIN|Finlandia
+FJI|Fiyi
+FLK|Islas Malvinas [Falkland] (las)
+FRA|Francia
+FRO|Islas Feroe (las)
+FSM|Micronesia (los Estados Federados de)
+GAB|Gabón
+GBR|Reino Unido (el)
+GEO|Georgia
+GGY|Guernsey
+GHA|Ghana
+GIB|Gibraltar
+GIN|Guinea
+GLP|Guadalupe
+GMB|Gambia (La)
+GNB|Guinea-Bisáu
+GNQ|Guinea Ecuatorial
+GRC|Grecia
+GRD|Granada
+GRL|Groenlandia
+GTM|Guatemala
+GUF|Guayana Francesa
+GUM|Guam
+GUY|Guyana
+HKG|Hong Kong
+HMD|Isla Heard e Islas McDonald
+HND|Honduras
+HRV|Croacia
+HTI|Haití
+HUN|Hungría
+IDN|Indonesia
+IMN|Isla de Man
+IND|India
+IOT|Territorio Británico del Océano Índico (el)
+IRL|Irlanda
+IRN|Irán (la República Islámica de)
+IRQ|Irak
+ISL|Islandia
+ISR|Israel
+ITA|Italia
+JAM|Jamaica
+JEY|Jersey
+JOR|Jordania
+JPN|Japón
+KAZ|Kazajistán
+KEN|Kenia
+KGZ|Kirguistán
+KHM|Camboya
+KIR|Kiribati
+KNA|San Cristóbal y Nieves
+KOR|Corea (la República de)
+KWT|Kuwait
+LAO|Lao, (la) República Democrática Popular
+LBN|Líbano
+LBR|Liberia
+LBY|Libia
+LCA|Santa Lucía
+LIE|Liechtenstein
+LKA|Sri Lanka
+LSO|Lesoto
+LTU|Lituania
+LUX|Luxemburgo
+LVA|Letonia
+MAC|Macao
+MAF|San Martín (parte francesa)
+MAR|Marruecos
+MCO|Mónaco
+MDA|Moldavia (la República de)
+MDG|Madagascar
+MDV|Maldivas
+MEX|México
+MHL|Islas Marshall (las)
+MKD|Macedonia (la antigua República Yugoslava de)
+MLI|Malí
+MLT|Malta
+MMR|Myanmar
+MNE|Montenegro
+MNG|Mongolia
+MNP|Islas Marianas del Norte (las)
+MOZ|Mozambique
+MRT|Mauritania
+MSR|Montserrat
+MTQ|Martinica
+MUS|Mauricio
+MWI|Malaui
+MYS|Malasia
+MYT|Mayotte
+NAM|Namibia
+NCL|Nueva Caledonia
+NER|Níger (el)
+NFK|Isla Norfolk
+NGA|Nigeria
+NIC|Nicaragua
+NIU|Niue
+NLD|Países Bajos (los)
+NOR|Noruega
+NPL|Nepal
+NRU|Nauru
+NZL|Nueva Zelanda
+OMN|Omán
+PAK|Pakistán
+PAN|Panamá
+PCN|Pitcairn
+PER|Perú
+PHL|Filipinas (las)
+PLW|Palaos
+PNG|Papúa Nueva Guinea
+POL|Polonia
+PRI|Puerto Rico
+PRK|Corea (la República Democrática Popular de)
+PRT|Portugal
+PRY|Paraguay
+PSE|Palestina, Estado de
+PYF|Polinesia Francesa
+QAT|Catar
+REU|Reunión
+ROU|Rumania
+RUS|Rusia, (la) Federación de
+RWA|Ruanda
+SAU|Arabia Saudita
+SDN|Sudán (el)
+SEN|Senegal
+SGP|Singapur
+SGS|Georgia del sur y las islas sandwich del sur
+SHN|Santa Helena, Ascensión y Tristán de Acuña
+SJM|Svalbard y Jan Mayen
+SLB|Islas Salomón (las)
+SLE|Sierra leona
+SLV|El Salvador
+SMR|San Marino
+SOM|Somalia
+SPM|San Pedro y Miquelón
+SRB|Serbia
+SSD|Sudán del Sur
+STP|Santo Tomé y Príncipe
+SUR|Surinam
+SVK|Eslovaquia
+SVN|Eslovenia
+SWE|Suecia
+SWZ|Suazilandia
+SXM|Sint Maarten (parte holandesa)
+SYC|Seychelles
+SYR|Siria, (la) República Árabe
+TCA|Islas Turcas y Caicos (las)
+TCD|Chad
+TGO|Togo
+THA|Tailandia
+TJK|Tayikistán
+TKL|Tokelau
+TKM|Turkmenistán
+TLS|Timor-Leste
+TON|Tonga
+TTO|Trinidad y Tobago
+TUN|Túnez
+TUR|Turquía
+TUV|Tuvalu
+TWN|Taiwán (Provincia de China)
+TZA|Tanzania, República Unida de
+UGA|Uganda
+UKR|Ucrania
+UMI|Islas de Ultramar Menores de Estados Unidos (las)
+URY|Uruguay
+USA|Estados Unidos (los)
+UZB|Uzbekistán
+VAT|Santa Sede[Estado de la Ciudad del Vaticano] (la)
+VCT|San Vicente y las Granadinas
+VEN|Venezuela, República Bolivariana de
+VGB|Islas Vírgenes (Británicas)
+VIR|Islas Vírgenes (EE.UU.)
+VNM|Viet Nam
+VUT|Vanuatu
+WLF|Wallis y Futuna
+WSM|Samoa
+YEM|Yemen
+ZAF|Sudáfrica
+ZMB|Zambia
+ZWE|Zimbabue
+ZZZ|Países no declarados

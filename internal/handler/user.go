@@ -10,7 +10,9 @@ import (
 	"regexp"
 	"strings"
 
+	"github.com/google/uuid"
 	"github.com/uptrace/bun"
+	"golang.org/x/crypto/bcrypt"
 
 	"github.com/siigofiscal/go_backend/internal/config"
 	"github.com/siigofiscal/go_backend/internal/db"
@@ -171,6 +173,8 @@ func (h *User) CreateUser(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	req.Email = strings.TrimSpace(strings.ToLower(req.Email))
+
 	ctx := r.Context()
 	database := db.FromContext(ctx)
 	if database == nil {
@@ -180,15 +184,26 @@ func (h *User) CreateUser(w http.ResponseWriter, r *http.Request) {
 	// Check if user exists
 	var existing control.User
 	err = database.Primary.NewSelect().Model(&existing).
-		Where("email = ?", req.Email).Limit(1).Scan(ctx)
+		Where("lower(trim(email)) = ?", req.Email).Limit(1).Scan(ctx)
 	if err == nil {
 		response.Forbidden(w, "User already exists")
 		return
 	}
 
 	var cognitoSub string
+	var passwordHash *string
+
 	if h.cfg.LocalInfra {
 		cognitoSub = "local-signup-" + strings.ReplaceAll(req.Email, "@", "-")
+	} else if h.cfg.CloudProvider == "azure" {
+		cognitoSub = uuid.New().String()
+		hash, hashErr := bcrypt.GenerateFromPassword([]byte(req.Password), bcrypt.DefaultCost)
+		if hashErr != nil {
+			response.InternalError(w, "password hash failed")
+			return
+		}
+		hashStr := string(hash)
+		passwordHash = &hashStr
 	} else {
 		cognitoSub, err = h.idp.SignUp(ctx, req.Email, req.Password)
 		if err != nil {
@@ -198,12 +213,13 @@ func (h *User) CreateUser(w http.ResponseWriter, r *http.Request) {
 	}
 
 	user := &control.User{
-		Identifier: crud.NewIdentifier(),
-		Name:       strPtr(req.Name),
-		Email:      req.Email,
-		CognitoSub: &cognitoSub,
-		SourceName: nilIfEmpty(req.SourceName),
-		Phone:      nilIfEmpty(req.Phone),
+		Identifier:   crud.NewIdentifier(),
+		Name:         strPtr(req.Name),
+		Email:        req.Email,
+		PasswordHash: passwordHash,
+		CognitoSub:   &cognitoSub,
+		SourceName:   nilIfEmpty(req.SourceName),
+		Phone:        nilIfEmpty(req.Phone),
 	}
 
 	if _, err := database.Primary.NewInsert().Model(user).Exec(ctx); err != nil {

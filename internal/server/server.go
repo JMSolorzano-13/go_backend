@@ -13,7 +13,7 @@ import (
 	"github.com/siigofiscal/go_backend/internal/server/middleware"
 )
 
-func New(cfg *config.Config, database *db.Database, bus *event.Bus, files port.FileStorage, idp port.IdentityProvider, jwtDecoder *auth.JWTDecoder, stripeClient ...*stripeinfra.Client) http.Handler {
+func New(cfg *config.Config, database *db.Database, bus *event.Bus, files port.FileStorage, certMirror port.FileStorage, idp port.IdentityProvider, jwtDecoder *auth.JWTDecoder, stripeClient ...*stripeinfra.Client) http.Handler {
 	var sc *stripeinfra.Client
 	if len(stripeClient) > 0 {
 		sc = stripeClient[0]
@@ -40,7 +40,7 @@ func New(cfg *config.Config, database *db.Database, bus *event.Bus, files port.F
 	}
 
 	// --- Phase 7: Company management (11 endpoints) ---
-	companyH := handler.NewCompany(cfg, database, bus, files)
+	companyH := handler.NewCompany(cfg, database, bus, files, certMirror)
 	mux.HandleFunc("POST /api/Company/upload_cer", authMW.RequireCompany(companyH.UploadCer))
 	mux.HandleFunc("POST /api/Company/get_cer", authMW.RequireCompany(companyH.GetCer))
 	mux.HandleFunc("POST /api/Company/search", companyH.Search)
@@ -233,14 +233,19 @@ func New(cfg *config.Config, database *db.Database, bus *event.Bus, files port.F
 	mux.HandleFunc("GET /api/Workspace/{workspace_id}/license/{key}", authMW.RequireAdminCreate(workspaceH.GetLicense))
 	mux.HandleFunc("PUT /api/Workspace/{workspace_id}/license/{key}", authMW.RequireAdminCreate(workspaceH.SetLicense))
 
+	corsOrigins := []string{"http://localhost:5173"}
+	if cfg.FrontendBaseURL != "" && cfg.FrontendBaseURL != "http://localhost:5173" {
+		corsOrigins = append(corsOrigins, cfg.FrontendBaseURL)
+	}
+	// Mux-level preflight: fixes 405 when OPTIONS reaches ServeMux (login POST preflight).
+	mux.HandleFunc("OPTIONS /api/{path...}", middleware.Preflight(corsOrigins))
+
 	// --- Global middleware chain ---
 	var h http.Handler = mux
 	h = db.InjectDatabase(database)(h)
 	h = middleware.Recovery(h)
 	h = middleware.Logging(h)
-	if cfg.LocalInfra {
-		h = middleware.CORS(h)
-	}
+	h = middleware.CORS(corsOrigins)(h)
 
 	return h
 }

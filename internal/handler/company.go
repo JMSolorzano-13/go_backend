@@ -8,7 +8,6 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
-	"os/exec"
 	"time"
 
 	"github.com/siigofiscal/go_backend/internal/config"
@@ -24,14 +23,15 @@ import (
 )
 
 type Company struct {
-	cfg      *config.Config
-	database *db.Database
-	bus      *event.Bus
-	files    port.FileStorage
+	cfg        *config.Config
+	database   *db.Database
+	bus        *event.Bus
+	files      port.FileStorage
+	certMirror port.FileStorage // optional: LocalStack S3 mirror for Python SAT worker when blob is Azurite
 }
 
-func NewCompany(cfg *config.Config, database *db.Database, bus *event.Bus, files port.FileStorage) *Company {
-	return &Company{cfg: cfg, database: database, bus: bus, files: files}
+func NewCompany(cfg *config.Config, database *db.Database, bus *event.Bus, files, certMirror port.FileStorage) *Company {
+	return &Company{cfg: cfg, database: database, bus: bus, files: files, certMirror: certMirror}
 }
 
 var companyMeta = crud.ModelMeta{
@@ -293,6 +293,7 @@ func (h *Company) UploadCer(w http.ResponseWriter, r *http.Request) {
 		response.InternalError(w, fmt.Sprintf("upload passphrase: %v", err))
 		return
 	}
+	h.mirrorFIELToLocalStack(ctx, wsID, companyObj.ID, cerBytes, keyBytes, password)
 
 	isNew := true
 	if (companyObj.HaveCertificates != nil && *companyObj.HaveCertificates) ||
@@ -633,16 +634,21 @@ func (h *Company) createFromCerts(
 		CreatedAt:           now,
 	}
 
+	// Tenant DDL before control insert so we never persist a company whose schema is empty.
+	// On cloud, missing Python/Alembic (e.g. scratch image) must fail loudly — see Dockerfile.azure.
+	if err := h.runTenantMigrations(ctx, database, identifier); err != nil {
+		if h.cfg.LocalInfra {
+			slog.Warn("tenant migrations failed (non-fatal in local dev)", "schema", identifier, "error", err)
+		} else {
+			return nil, fmt.Errorf("tenant migrations: %w", err)
+		}
+	}
+
 	if _, err := database.Primary.NewInsert().Model(newCompany).Exec(ctx); err != nil {
 		return nil, fmt.Errorf("insert company: %w", err)
 	}
 
-	// Create tenant schema using Python Alembic migrations (authoritative schema)
-	if err := h.runTenantMigrations(ctx, database, newCompany.Identifier); err != nil {
-		slog.Warn("tenant migrations failed (non-fatal in local dev)", "schema", newCompany.Identifier, "error", err)
-	}
-
-	// Upload certs to S3
+	// Upload certs to blob/S3 (keys: ws_<workspaceID>/c_<companyID>.{cer,key,txt})
 	if err := h.files.Upload(ctx, h.cfg.S3Certs, s3keys.CertRoute(workspaceID, newCompany.ID, "cer"), cerBytes); err != nil {
 		return nil, fmt.Errorf("upload cer: %w", err)
 	}
@@ -652,6 +658,7 @@ func (h *Company) createFromCerts(
 	if err := h.files.Upload(ctx, h.cfg.S3Certs, s3keys.CertRoute(workspaceID, newCompany.ID, "txt"), []byte(password)); err != nil {
 		return nil, fmt.Errorf("upload passphrase: %w", err)
 	}
+	h.mirrorFIELToLocalStack(ctx, workspaceID, newCompany.ID, cerBytes, keyBytes, password)
 
 	newCompany.HaveCertificates = &bTrue
 	newCompany.HasValidCerts = &bTrue
@@ -690,22 +697,20 @@ func (h *Company) createFromCerts(
 }
 
 func (h *Company) runTenantMigrations(ctx context.Context, database *db.Database, schema string) error {
-	// Create schema first
+	slog.Warn("tenant_migration_start", "schema", schema, "cloud", h.cfg.CloudProvider)
+	if err := db.ValidateCompanyTenantSchema(schema); err != nil {
+		return err
+	}
 	_, err := database.Primary.ExecContext(ctx,
 		fmt.Sprintf(`CREATE SCHEMA IF NOT EXISTS "%s"`, schema))
 	if err != nil {
 		return fmt.Errorf("create schema: %w", err)
 	}
-
-	// Run Python Alembic migrations to create the full tenant schema.
-	// This ensures compatibility with Python workers that expect the complete schema.
-	cmd := exec.CommandContext(ctx, "./run_tenant_migration.sh", schema)
-	cmd.Dir = "../fastapi_backend"
-	out, err := cmd.CombinedOutput()
-	if err != nil {
-		return fmt.Errorf("alembic upgrade: %w (output: %s)", err, string(out))
+	if err := db.ApplyEmbeddedTenantDDL(ctx, database.Primary, schema); err != nil {
+		slog.Warn("tenant_migration_failed", "schema", schema, "error", err.Error())
+		return fmt.Errorf("tenant ddl: %w", err)
 	}
-	slog.Info("tenant migrations completed", "schema", schema, "output", string(out))
+	slog.Info("tenant migrations completed", "schema", schema)
 	return nil
 }
 
@@ -820,6 +825,29 @@ func populateCompanyEmails(c *control.Company, email string) {
 	c.EmailsToSendEfos = emailList
 	c.EmailsToSendErrors = emailList
 	c.EmailsToSendCanceled = emailList
+}
+
+// mirrorFIELToLocalStack duplicates cer/key/passphrase to LocalStack S3 when certMirror is set
+// (hybrid local: Azurite primary, Python worker reads S3_CERTS from LocalStack).
+func (h *Company) mirrorFIELToLocalStack(ctx context.Context, workspaceID, companyID int64, cerBytes, keyBytes []byte, password string) {
+	if h.certMirror == nil {
+		return
+	}
+	bucket := h.cfg.S3Certs
+	type pair struct {
+		ext  string
+		data []byte
+	}
+	for _, p := range []pair{
+		{"cer", cerBytes},
+		{"key", keyBytes},
+		{"txt", []byte(password)},
+	} {
+		key := s3keys.CertRoute(workspaceID, companyID, p.ext)
+		if err := h.certMirror.Upload(ctx, bucket, key, p.data); err != nil {
+			slog.Warn("cert_mirror: upload failed", "key", key, "error", err)
+		}
+	}
 }
 
 func strPtr(s string) *string { return &s }

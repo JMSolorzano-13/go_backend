@@ -2,7 +2,7 @@
 
 ## Project Context
 
-**What This Is**: Full Go 1.26+ rewrite of the FastAPI/Chalice backend for Siigo Fiscal (Mexican fiscal compliance SaaS). Maintains 100% API parity with 114 production endpoints while delivering 2-10x performance improvements.
+**What This Is**: Full Go 1.26+ rewrite of the FastAPI/Chalice backend for Siigo Fiscal (Mexican fiscal compliance SaaS). Maintains API parity with the legacy backend (~115 `HandleFunc` routes in `internal/server/server.go`; exact count drifts as routes are added). Primary deploy path includes Azure Container Apps; AWS remains the reference for queues/S3 in `CLOUD_PROVIDER=aws` mode.
 
 **Critical Constraint**: All HTTP responses MUST maintain Chalice-shaped error format `{"Code": "ErrorClass", "Message": "detail"}` for frontend compatibility. Route paths, parameter names, and response structures are immutable.
 
@@ -15,15 +15,17 @@
 - **HTTP Router**: `net/http.ServeMux` (pattern-based routing, Go 1.22+)
 - **ORM**: `uptrace/bun` v1.2+ with `pgdriver`
 - **Database**: Aurora PostgreSQL (RDS) via Bun ORM
-- **Config**: Environment variables via `.env` (custom parser, no external deps)
+- **Config**: Environment variables; `cmd/server` uses a **custom** `.env` loader in `internal/config/config.go` (`loadDotEnv`). `joho/godotenv` is used only in `cmd/sat_request_generator`, not in the API server.
 
 ### Infrastructure & Communication
-- **Event Bus**: In-memory pub/sub routing to SQS (matches Python EventBus)
-- **Async Processing**: AWS SQS (25+ queues for domain events)
-- **Storage**: S3 (certs, exports, attachments, XMLs)
-- **Auth**: AWS Cognito User Pool (JWT validation via `golang-jwt/jwt/v5`)
+- **Event Bus**: In-memory pub/sub; subscribers publish via `port.MessagePublisher` (AWS SQS or Azure Queue Storage)
+- **Async processing**: Domain events → queues (`internal/infra/sqs` or `internal/infra/azservicebus`), wired in `internal/infra/sqs/register.go:SubscribeAllHandlers`
+- **Storage**: `port.FileStorage` — AWS S3 (`internal/infra/s3`) or Azure Blob (`internal/infra/azblob`) when `CLOUD_PROVIDER=azure`
+- **Multi-cloud**: `CLOUD_PROVIDER` — `aws` (default) or `azure` (`AZURE_STORAGE_CONNECTION_STRING`, optional hybrid: Azure Blob + LocalStack SQS/S3 for local SAT workers — see `cmd/server/main.go`)
+- **Auth**: Cognito JWKS path + **self-managed JWT** (`internal/infra/selfauth`) when running in Azure-oriented setups; `golang-jwt/jwt/v5`
 - **Payments**: Stripe Go SDK v81
 - **AWS SDK**: v2 (SQS, S3, Cognito-IDP)
+- **Browser automation**: `chromedp` (PDF/SAT-related tooling where used)
 
 ### Exports & Utilities
 - **Excel**: `github.com/xuri/excelize/v2`
@@ -38,7 +40,8 @@
 
 ```
 go_backend/
-├── cmd/server/          # main.go — wires config, DB, bus, HTTP server
+├── cmd/server/          # main.go — wires config, DB, bus, HTTP server, cloud adapters
+├── cmd/sat_request_generator/  # CLI: SAT request tooling (separate entrypoint)
 ├── internal/
 │   ├── config/          # Config struct, .env loading
 │   ├── db/              # Database wrapper, tenant schema routing
@@ -50,10 +53,14 @@ go_backend/
 │   │   ├── cfdi/        # CFDI-specific business logic (IVA/ISR calculations)
 │   │   └── company/     # Certificate handling (PKCS8, FIEL)
 │   ├── handler/         # HTTP handlers (one file per resource)
+│   ├── domain/port/     # Interfaces: FileStorage, MessagePublisher (cloud-agnostic)
 │   ├── infra/           # Infrastructure adapters
 │   │   ├── cognito/     # Cognito-IDP client
 │   │   ├── s3/          # S3 client + presign
-│   │   ├── sqs/         # SQS client + event publishing
+│   │   ├── sqs/         # SQS client, register.go wires bus → queues
+│   │   ├── azblob/      # Azure Blob (CLOUD_PROVIDER=azure)
+│   │   ├── azservicebus/# Azure Queue publisher (maps to MessagePublisher)
+│   │   ├── selfauth/    # HS256 dev/prod JWT when not using Cognito-only path
 │   │   ├── stripe/      # Stripe client
 │   │   └── pasto/       # Pasto/ADD external API client
 │   ├── model/           # Bun ORM models (database entities)
@@ -63,12 +70,12 @@ go_backend/
 │   ├── logger/          # Structured logging (slog wrapper)
 │   └── server/
 │       ├── middleware/  # Auth, CORS, logging, recovery
-│       └── server.go    # Route registration (114 endpoints)
+│       └── server.go    # Route registration (~115 routes; immutable paths)
 ```
 
 ### Key Architectural Principles
 
-1. **Hexagonal Architecture**: Domain layer (`internal/domain/`) has ZERO dependencies on frameworks (no `net/http`, `bun`, `aws-sdk-go`)
+1. **Layered / ports-adapters**: Handlers and `infra/` talk to AWS/Azure; **`internal/domain/port`** defines `FileStorage` and `MessagePublisher`. **Exception:** `internal/domain/crud` is intentionally coupled to **`bun.IDB`** (generic search engine — same as production reality). Prefer keeping new **pure** business rules free of `net/http` and cloud SDKs; use ports for new external integrations.
 2. **Multi-Tenant Database**: Per-company PostgreSQL schemas with `SET search_path TO "company_identifier"` isolation
 3. **Event-Driven Communication**: EventBus publishes domain events to SQS handlers (async processing)
 4. **CRUD Engine**: Generic `crud.Search` function handles 80% of endpoints (domain filters, fuzzy search, pagination)
@@ -603,10 +610,16 @@ _, err := conn.NewInsert().
 type Config struct {
     // Database
     DBHost     string
+    DBHostRO   string // read replica host (optional)
     DBPort     int
     DBName     string
     DBUser     string
     DBPassword string
+
+    // Multi-cloud
+    CloudProvider                string // "aws" | "azure"
+    AzureStorageConnectionString string
+    SelfAuthSigningKey           string // JWT HS256 when using selfauth path
 
     // AWS
     RegionName         string
@@ -634,7 +647,7 @@ type Config struct {
 }
 
 func Load() (*Config, error) {
-    loadDotEnv() // Custom .env parser (no external deps)
+    loadDotEnv() // Custom .env parser in this package (API server does not use godotenv)
     
     return &Config{
         DBHost:     mustEnv("DB_HOST"),
@@ -653,6 +666,14 @@ func Load() (*Config, error) {
 - ✅ Use `envBool(key)` for boolean flags (`1` = true, `0` = false)
 - ✅ `LOCAL_INFRA=true` enables: dev auth endpoints, CORS middleware, async event dispatch
 - ❌ NEVER hardcode secrets or environment-specific URLs in code
+
+---
+
+## Tooling & CI
+
+- **Formatting / lint**: Run `go fmt` on touched packages; project convention references `golangci-lint`, but **there is no committed `.golangci.yml`** in this repo — align with team standard or add one if you introduce stricter gates.
+- **GitHub Actions**: `.github/workflows/deploy-azure.yml` builds and deploys the Docker image to **Azure Container Apps** on `main` (path-ignore `*.md`). There is **no** automated `go test` workflow in-repo today.
+- **Migrations**: Optional `RUN_MIGRATIONS=1` at process start (`cmd/server/main.go`) runs embedded SQL migrations.
 
 ---
 
@@ -924,7 +945,7 @@ Before committing:
 
 This Go backend is a **high-performance, production-grade rewrite** of the Python/FastAPI backend with 100% API parity. Key architectural principles:
 
-1. **Clean Hexagonal Architecture**: Domain layer has zero framework dependencies
+1. **Ports + adapters + pragmatic domain**: Cloud and HTTP at edges; `domain/port` for storage/queues; `domain/crud` uses Bun by design
 2. **Multi-Tenant Database**: Per-company PostgreSQL schemas with `SET search_path` isolation
 3. **Event-Driven**: EventBus publishes domain events to SQS for async processing
 4. **Generic CRUD Engine**: `crud.Search` handles 80% of endpoints with Odoo-style domain filters
@@ -935,4 +956,4 @@ This Go backend is a **high-performance, production-grade rewrite** of the Pytho
 
 ---
 
-**Last Updated**: 2026-04-01
+**Last Updated**: 2026-04-08

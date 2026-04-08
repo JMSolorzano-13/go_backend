@@ -1,6 +1,9 @@
 # Deploy go_backend to Azure Container Apps (ACR push + revision update).
 # Repo: https://github.com/JMSolorzano-13/go_backend
 #
+# **Tenant DB schemas:** Embedded SQL in `go_backend/internal/db/tenant_schema/tenant_tables.sql`
+# (regenerate via `go_backend/scripts/regenerate_tenant_tables_sql.sh` when Alembic tenant head changes).
+#
 # Secret: AZURE_CREDENTIALS — JSON from `az ad sp create-for-rbac --sdk-auth` (clientId, clientSecret, subscriptionId, tenantId, …).
 # Repository variables (Settings → Secrets and variables → Actions → Variables):
 #   AZURE_RESOURCE_GROUP, AZURE_ACR_NAME (registry name only, e.g. myregistry), AZURE_CONTAINER_APP_NAME
