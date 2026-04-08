@@ -50,7 +50,7 @@ func (p *Publisher) SendMessage(ctx context.Context, in *port.SendMessageInput) 
 	if in == nil {
 		return errors.New("azsbpub: nil SendMessageInput")
 	}
-	name := queueNameFromSQSURL(in.QueueURL)
+	name := QueueNameFromSQSURL(in.QueueURL)
 	if name == "" {
 		return fmt.Errorf("azsbpub: could not parse queue name from %q", in.QueueURL)
 	}
@@ -73,9 +73,9 @@ func (p *Publisher) SendMessage(ctx context.Context, in *port.SendMessageInput) 
 	return nil
 }
 
-// queueNameFromSQSURL mirrors internal/infra/azservicebus/publisher.go: last path segment
-// or raw token, with underscores mapped to hyphens for Azure queue naming.
-func queueNameFromSQSURL(queueURL string) string {
+// QueueNameFromSQSURL resolves an SQS-style queue URL or plain name to an Azure Service Bus
+// queue name (last path segment; underscores → hyphens).
+func QueueNameFromSQSURL(queueURL string) string {
 	u, err := url.Parse(strings.TrimSpace(queueURL))
 	if err != nil || u.Path == "" {
 		return azureQueueName(strings.Trim(strings.TrimSpace(queueURL), "/"))
