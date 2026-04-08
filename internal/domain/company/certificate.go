@@ -113,7 +113,7 @@ func extractRFCFromUniqueID(uid string) string {
 // and verifies it matches the certificate's public key.
 func ValidatePrivateKey(keyDER []byte, password string, cert *ParsedCertificate) error {
 	// Parse the encrypted PKCS#8 private key.
-	privKey, err := parseEncryptedPKCS8(keyDER, []byte(password))
+	privKey, err := ParseEncryptedPKCS8(keyDER, []byte(password))
 	if err != nil {
 		return fmt.Errorf("Invalid private key, maybe the passphrase is wrong: %w", err)
 	}

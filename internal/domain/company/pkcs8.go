@@ -66,9 +66,9 @@ type pbeParams struct {
 	Iterations int
 }
 
-// parseEncryptedPKCS8 decrypts a DER-encoded encrypted PKCS#8 private key.
+// ParseEncryptedPKCS8 decrypts a DER-encoded encrypted PKCS#8 private key.
 // Supports PBES2 (PBKDF2 + AES-CBC or 3DES-CBC) and PBE-SHA1-3DES-CBC.
-func parseEncryptedPKCS8(der, password []byte) (interface{}, error) {
+func ParseEncryptedPKCS8(der, password []byte) (interface{}, error) {
 	var epki encryptedPrivateKeyInfo
 	if _, err := asn1.Unmarshal(der, &epki); err != nil {
 		return nil, fmt.Errorf("parse encrypted PKCS#8 envelope: %w", err)
