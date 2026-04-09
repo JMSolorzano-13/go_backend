@@ -7,6 +7,7 @@
 # Secret: AZURE_CREDENTIALS — JSON from `az ad sp create-for-rbac --sdk-auth` (clientId, clientSecret, subscriptionId, tenantId, …).
 # Repository variables (Settings → Secrets and variables → Actions → Variables):
 #   AZURE_RESOURCE_GROUP, AZURE_ACR_NAME (registry name only, e.g. myregistry), AZURE_CONTAINER_APP_NAME
+#   AZURE_WORKER_CONTAINER_APP_NAME — optional; SAT Service Bus worker (`go-worker` image). If unset, worker image is still pushed but ACA is not updated.
 
 name: Deploy Azure (ACA)
 
@@ -32,6 +33,7 @@ permissions:
 
 env:
   IMAGE_NAME: go-backend
+  IMAGE_NAME_WORKER: go-worker
 
 jobs:
   build-push-deploy:
@@ -84,10 +86,33 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
-      - name: Update Container App
+      - name: Build and push worker image (prod-worker / dev-worker)
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ./Dockerfile
+          target: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.docker_target == 'dev' && 'dev-worker' || 'prod-worker' }}
+          push: true
+          tags: |
+            ${{ vars.AZURE_ACR_NAME }}.azurecr.io/${{ env.IMAGE_NAME_WORKER }}:${{ steps.tag.outputs.value }}
+            ${{ vars.AZURE_ACR_NAME }}.azurecr.io/${{ env.IMAGE_NAME_WORKER }}:latest
+          platforms: linux/amd64
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Update API Container App
         run: |
           az containerapp update \
             --name "${{ vars.AZURE_CONTAINER_APP_NAME }}" \
             --resource-group "${{ vars.AZURE_RESOURCE_GROUP }}" \
             --image "${{ vars.AZURE_ACR_NAME }}.azurecr.io/${{ env.IMAGE_NAME }}:${{ steps.tag.outputs.value }}" \
+            --output none
+
+      - name: Update SAT worker Container App
+        if: ${{ vars.AZURE_WORKER_CONTAINER_APP_NAME != '' }}
+        run: |
+          az containerapp update \
+            --name "${{ vars.AZURE_WORKER_CONTAINER_APP_NAME }}" \
+            --resource-group "${{ vars.AZURE_RESOURCE_GROUP }}" \
+            --image "${{ vars.AZURE_ACR_NAME }}.azurecr.io/${{ env.IMAGE_NAME_WORKER }}:${{ steps.tag.outputs.value }}" \
             --output none
