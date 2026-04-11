@@ -136,6 +136,7 @@ func main() {
 		fn       func(context.Context, json.RawMessage) error
 	}
 	routes := []route{
+		{cfg.SQSSendQueryMetadata, "send_query_metadata", (&handlers.SendQueryMetadata{Deps: deps}).Handle},
 		{cfg.SQSCreateQuery, "create_query", (&handlers.CreateQuery{Deps: deps}).Handle},
 		{cfg.SQSVerifyQuery, "verify_query", (&handlers.VerifyQuery{Deps: deps}).Handle},
 		{cfg.SQSDownloadQuery, "download_query", (&handlers.DownloadQuery{Deps: deps}).Handle},

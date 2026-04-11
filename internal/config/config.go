@@ -128,10 +128,12 @@ type Config struct {
 	SESMail string
 
 	// Application
-	MaxManualSyncPerDay      int
-	DefaultLicenseLifetime   time.Duration
-	ScrapManualStartDate     time.Time
-	DaysToKeepSATQueryTable  int
+	MaxManualSyncPerDay     int
+	DefaultLicenseLifetime  time.Duration
+	ScrapManualStartDate    time.Time
+	DaysToKeepSATQueryTable int
+	// WSMaxWaitingMinutes caps how long SAT query verification retries before TIME_LIMIT_REACHED (env WS_MAX_WAITING_MINUTES, integer minutes; default 240 = 4h).
+	WSMaxWaitingMinutes      time.Duration
 	DevFIELAndCSDPassphrase  []byte
 	StatisticsInfoTimeDelta  time.Duration
 	StatisticsInfoPeriodSecs int
@@ -312,6 +314,7 @@ func Load() (*Config, error) {
 		DefaultLicenseLifetime:   time.Duration(envInt("DEFAULT_LICENSE_LIFETIME", 10)) * 24 * time.Hour,
 		ScrapManualStartDate:     scrapStart,
 		DaysToKeepSATQueryTable:  envInt("DAYS_TO_KEEP_SAT_QUERY_TABLE", 7),
+		WSMaxWaitingMinutes:      time.Duration(envInt("WS_MAX_WAITING_MINUTES", 240)) * time.Minute,
 		DevFIELAndCSDPassphrase:  []byte(envOr("DEV_FIEL_AND_CSD_PASSPHRASE", "")),
 		StatisticsInfoTimeDelta:  time.Duration(envInt("STATISTICS_INFO_TIME_DELTA", 10)) * time.Minute,
 		StatisticsInfoPeriodSecs: envInt("STATISTICS_INFO_PERIOD_SECONDS", 60),

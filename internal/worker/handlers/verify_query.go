@@ -20,25 +20,32 @@ const (
 	// maxCFDIQtyInQuery is the sanity limit on CFDIs for non-metadata queries.
 	maxCFDIQtyInQuery = 500_000
 
-	// verifyRetryDelay is the delay before a re-verify message is published.
-	verifyRetryDelay = 60 * time.Second
-
-	// maxWaitingMinutes is how long we keep retrying before giving up.
-	maxWaitingMinutes = 30 * time.Minute
-
-	// maxWaitingMinutesToRecreate is the window in which we recreate instead of fail.
-	maxWaitingMinutesToRecreate = 2 * time.Hour
+	// defaultWSMaxWait is used if WSMaxWaitingMinutes is misconfigured to zero.
+	defaultWSMaxWait = 240 * time.Minute
 
 	// VerifyQueryStatusCode constants matching Python VerifyQueryStatusCode.
 	verifyStatusCodeInfoNotFound = 5004
 	verifyStatusCodeMaxLimit     = 5002
 )
 
+// verifyBackoffDelay returns how long to wait before the next verify attempt,
+// based on elapsed time since sent_date: 15m, then 30m, then 60m (repeating).
+func verifyBackoffDelay(elapsed time.Duration) time.Duration {
+	switch {
+	case elapsed < 15*time.Minute:
+		return 15 * time.Minute
+	case elapsed < 45*time.Minute:
+		return 30 * time.Minute
+	default:
+		return 60 * time.Minute
+	}
+}
+
 // VerifyQuery handles SAT_WS_QUERY_SENT / SAT_WS_QUERY_VERIFY_NEEDED messages.
 //
 // Pipeline step 2: load FIEL → call VerificaSolicitud on SAT → route by status:
 //   - FINISHED → publish SAT_WS_QUERY_DOWNLOAD_READY
-//   - IN_PROCESS/ACCEPTED/UNKNOWN → re-publish SAT_WS_QUERY_VERIFY_NEEDED (retry with delay)
+//   - IN_PROCESS/ACCEPTED/UNKNOWN → re-publish SAT_WS_QUERY_VERIFY_NEEDED (incremental backoff until WS max wait)
 //   - ERROR/REJECTED/EXPIRED → mark error state
 //
 // Mirrors Python QueryVerifierWS.parallel_verify + action dispatch.
@@ -50,6 +57,9 @@ func (h *VerifyQuery) Handle(ctx context.Context, raw json.RawMessage) error {
 	var msg VerifyQueryMsg
 	if err := json.Unmarshal(raw, &msg); err != nil {
 		return fmt.Errorf("unmarshal VerifyQueryMsg: %w", err)
+	}
+	if err := h.enrichSentDateIfMissing(ctx, &msg); err != nil {
+		return err
 	}
 
 	logger := slog.With(
@@ -63,7 +73,7 @@ func (h *VerifyQuery) Handle(ctx context.Context, raw json.RawMessage) error {
 	connector, err := h.loadFIEL(ctx, msg.WID, msg.CID)
 	if err != nil {
 		logger.Error("failed to load FIEL for verify, retrying", "error", err)
-		return h.retryVerify(msg, logger)
+		return h.retryOrTimeout(msg, logger)
 	}
 
 	// 2. Call VerificaSolicitud.
@@ -141,6 +151,7 @@ func (h *VerifyQuery) handleFinished(ctx context.Context, msg VerifyQueryMsg, sq
 		End:               msg.End,
 		State:             tenant.QueryStateToDownload,
 		Name:              msg.Name,
+		SentDate:          msg.SentDate,
 		IsManual:          msg.IsManual,
 		WID:               msg.WID,
 		CID:               msg.CID,
@@ -178,10 +189,9 @@ func (h *VerifyQuery) handleError(ctx context.Context, msg VerifyQueryMsg, sq *s
 	}
 }
 
-// retryVerify publishes a retry verify event with a delay.
-func (h *VerifyQuery) retryVerify(msg VerifyQueryMsg, logger *slog.Logger) error {
-	logger.Debug("retrying verify")
-	delayAt := time.Now().UTC().Add(verifyRetryDelay)
+// publishVerifyRetry enqueues another verify at executeAt.
+func (h *VerifyQuery) publishVerifyRetry(msg VerifyQueryMsg, executeAt time.Time) error {
+	delayAt := executeAt.UTC()
 	h.Bus.Publish(event.EventTypeSATWSQueryVerifyNeeded, event.QueryVerifyEvent{
 		SQSBase: event.SQSBase{
 			Identifier: msg.Identifier,
@@ -195,6 +205,7 @@ func (h *VerifyQuery) retryVerify(msg VerifyQueryMsg, logger *slog.Logger) error
 		End:               msg.End,
 		State:             msg.State,
 		Name:              msg.Name,
+		SentDate:          msg.SentDate,
 		IsManual:          msg.IsManual,
 		WID:               msg.WID,
 		CID:               msg.CID,
@@ -202,38 +213,60 @@ func (h *VerifyQuery) retryVerify(msg VerifyQueryMsg, logger *slog.Logger) error
 	return nil
 }
 
-// retryOrTimeout either retries the verify or marks the query as timed out /
-// substituted depending on elapsed time since sent_date.
+// retryOrTimeout schedules another verify with incremental backoff until
+// WSMaxWaitingMinutes elapses from sent_date, then marks TIME_LIMIT_REACHED.
 func (h *VerifyQuery) retryOrTimeout(msg VerifyQueryMsg, logger *slog.Logger) error {
 	now := time.Now().UTC()
 	elapsed := now.Sub(msg.SentDate)
 
-	if elapsed <= maxWaitingMinutes {
-		return h.retryVerify(msg, logger)
+	maxWait := h.Cfg.WSMaxWaitingMinutes
+	if maxWait <= 0 {
+		maxWait = defaultWSMaxWait
 	}
 
-	// Check if we can recreate.
-	if elapsed < maxWaitingMinutesToRecreate {
-		logger.Info("recreating query after timeout")
-		h.Bus.Publish(event.EventTypeSATWSRequestCreateQuery, event.QueryCreateEvent{
-			SQSBase:           event.NewSQSBase(),
-			CompanyIdentifier: msg.CompanyIdentifier,
-			DownloadType:      msg.DownloadType,
-			RequestType:       msg.RequestType,
-			IsManual:          msg.IsManual,
-			Start:             &msg.Start,
-			End:               &msg.End,
-			WID:               msg.WID,
-			CID:               msg.CID,
-		})
-		// Mark old query as SUBSTITUTED.
+	if elapsed >= maxWait {
+		logger.Warn("time limit reached", "elapsed", elapsed, "max_wait", maxWait)
 		ctx := context.Background()
-		return h.updateQueryState(ctx, msg, tenant.QueryStateSubstituted, 0, nil)
+		return h.updateQueryState(ctx, msg, tenant.QueryStateTimeLimitReached, 0, nil)
 	}
 
-	logger.Warn("time limit reached")
-	ctx := context.Background()
-	return h.updateQueryState(ctx, msg, tenant.QueryStateTimeLimitReached, 0, nil)
+	delay := verifyBackoffDelay(elapsed)
+	if remain := maxWait - elapsed; delay > remain {
+		delay = remain
+	}
+	if delay <= 0 {
+		logger.Warn("time limit reached", "elapsed", elapsed, "max_wait", maxWait)
+		ctx := context.Background()
+		return h.updateQueryState(ctx, msg, tenant.QueryStateTimeLimitReached, 0, nil)
+	}
+
+	logger.Debug("scheduling verify retry", "delay", delay, "elapsed", elapsed, "max_wait", maxWait)
+	return h.publishVerifyRetry(msg, now.Add(delay))
+}
+
+// enrichSentDateIfMissing loads sent_date from sat_query when the queue payload omits it (legacy).
+func (h *VerifyQuery) enrichSentDateIfMissing(ctx context.Context, msg *VerifyQueryMsg) error {
+	if !msg.SentDate.IsZero() {
+		return nil
+	}
+	conn, err := h.DB.TenantConn(ctx, msg.CompanyIdentifier, true)
+	if err != nil {
+		return fmt.Errorf("tenant conn for sent_date: %w", err)
+	}
+	defer conn.Close()
+
+	var row tenant.SATQuery
+	if err := conn.NewSelect().
+		Model(&row).
+		Column("sent_date").
+		Where("identifier = ?", msg.QueryIdentifier).
+		Scan(ctx); err != nil {
+		return fmt.Errorf("load sat_query sent_date: %w", err)
+	}
+	if row.SentDate != nil {
+		msg.SentDate = *row.SentDate
+	}
+	return nil
 }
 
 // updateQueryState updates the sat_query row with a new state and optional cfdis_qty/packages.

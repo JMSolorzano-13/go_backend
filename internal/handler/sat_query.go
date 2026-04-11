@@ -106,6 +106,14 @@ func (h *SATQuery) Manual(w http.ResponseWriter, r *http.Request) {
 	mxNow := mxNowTime()
 	start := mxNow.Add(-h.cfg.ManualRequestStartDelta())
 
+	h.publishManualSATEvents(company, start, mxNow)
+
+	response.WriteJSON(w, http.StatusOK, resp)
+}
+
+// publishManualSATEvents enqueues CFDI (ISSUED+RECEIVED), metadata (SendQueryMetadata
+// pipeline), and SAT document scrap — mirrors Python manual SAT sync.
+func (h *SATQuery) publishManualSATEvents(company *control.Company, start, mxNow time.Time) {
 	wid := int64(0)
 	if company.WorkspaceID != nil {
 		wid = *company.WorkspaceID
@@ -140,14 +148,19 @@ func (h *SATQuery) Manual(w http.ResponseWriter, r *http.Request) {
 	if company.RFC != nil {
 		rfc = *company.RFC
 	}
+	h.bus.Publish(event.EventTypeSATMetadataRequested, event.SQSCompanySendMetadata{
+		CompanyBase:       event.NewCompanyBase(company.Identifier, rfc),
+		ManuallyTriggered: true,
+		WID:               wid,
+		CID:               company.ID,
+	})
+
 	h.bus.Publish(event.EventTypeRequestScrap, event.ScrapRequestEvent{
 		CompanyIdentifier: company.Identifier,
 		CompanyRFC:        rfc,
 		WorkspaceID:       wid,
 		CompanyID:         company.ID,
 	})
-
-	response.WriteJSON(w, http.StatusOK, resp)
 }
 
 // 3. POST /api/SATQuery/can_manual_request
@@ -416,6 +429,10 @@ func (h *SATQuery) publishReverifications(ctx context.Context, conn bun.Conn, co
 	}
 
 	for _, q := range queries {
+		var sentDate time.Time
+		if q.SentDate != nil {
+			sentDate = *q.SentDate
+		}
 		h.bus.Publish(event.EventTypeSATWSQueryVerifyNeeded, event.QueryVerifyEvent{
 			SQSBase:           event.NewSQSBase(),
 			CompanyIdentifier: company.Identifier,
@@ -426,6 +443,7 @@ func (h *SATQuery) publishReverifications(ctx context.Context, conn bun.Conn, co
 			End:               q.End,
 			State:             q.State,
 			Name:              q.Name,
+			SentDate:          sentDate,
 			IsManual:          q.IsManual != nil && *q.IsManual,
 			WID:               wid,
 			CID:               company.ID,

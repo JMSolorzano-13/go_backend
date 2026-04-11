@@ -115,6 +115,7 @@ func (h *CreateQuery) Handle(ctx context.Context, raw json.RawMessage) error {
 		End:               sq.End,
 		State:             tenant.QueryStateSent,
 		Name:              satQuery.Identifier,
+		SentDate:          sentDate,
 		IsManual:          msg.IsManual,
 		WID:               msg.WID,
 		CID:               msg.CID,

@@ -92,6 +92,7 @@ type QueryVerifyEvent struct {
 	End               time.Time `json:"end"`
 	State             string    `json:"state"`
 	Name              string    `json:"name"`
+	SentDate          time.Time `json:"sent_date"`
 	IsManual          bool      `json:"is_manual"`
 	WID               int64     `json:"wid"`
 	CID               int64     `json:"cid"`

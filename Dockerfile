@@ -10,7 +10,8 @@ COPY go.mod go.sum ./
 RUN go mod download
 COPY . .
 RUN CGO_ENABLED=0 GOOS=linux go build -ldflags="-s -w" -o /go-backend ./cmd/server && \
-    CGO_ENABLED=0 GOOS=linux go build -ldflags="-s -w" -o /go-worker ./cmd/worker
+    CGO_ENABLED=0 GOOS=linux go build -ldflags="-s -w" -o /go-worker ./cmd/worker && \
+    CGO_ENABLED=0 GOOS=linux go build -ldflags="-s -w" -o /cron ./cmd/cron
 
 # ---------------------------------------------------------------------------
 # Dev image — alpine with shell for debugging
@@ -47,3 +48,11 @@ FROM scratch AS prod-worker
 COPY --from=builder /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/
 COPY --from=builder /go-worker /go-worker
 ENTRYPOINT ["/go-worker"]
+
+# ---------------------------------------------------------------------------
+# Prod cron — scheduled SAT sync jobs (no HTTP port)
+# ---------------------------------------------------------------------------
+FROM scratch AS prod-cron
+COPY --from=builder /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/
+COPY --from=builder /cron /cron
+ENTRYPOINT ["/cron"]
