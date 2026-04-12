@@ -2,8 +2,10 @@ package event
 
 import (
 	"testing"
+	"time"
 
 	"github.com/siigofiscal/go_backend/internal/config"
+	"github.com/siigofiscal/go_backend/internal/domain/datetime"
 )
 
 type seqRecorder struct {
@@ -30,10 +32,20 @@ func TestOnCompanyCreateAutoSync_LocalInfra_PublishesMetadataAndCompleteCFDIs(t 
 	bus := NewBus(false)
 	var rec seqRecorder
 	rec.subscribe(bus, EventTypeSATMetadataRequested)
+	rec.subscribe(bus, EventTypeSATWSRequestCreateQuery)
 	rec.subscribe(bus, EventTypeSATCompleteCFDIsNeeded)
 	rec.subscribe(bus, EventTypeRequestScrap)
 
-	h := &OnCompanyCreateAutoSync{Bus: bus, Cfg: &config.Config{LocalInfra: true}}
+	fixedNow := time.Date(2026, 6, 15, 12, 0, 0, 0, time.UTC)
+	start := datetime.LastXFiscalYearsStart(5)
+	endEx := datetime.MXCalendarDate(fixedNow.In(datetime.MexicoCity())).AddDate(0, 0, 1)
+	nWin := len(datetime.ChunkRangeByDays(start, endEx, initialCompanyCFDIChunkDays))
+	nCreate := nWin * 2
+
+	h := &OnCompanyCreateAutoSync{
+		Bus: bus, Cfg: &config.Config{LocalInfra: true},
+		TimeNow: func() time.Time { return fixedNow },
+	}
 	err := h.Handle(CompanyCreatedEvent{
 		CompanyIdentifier: "00000000-0000-0000-0000-000000000001",
 		CompanyRFC:        "XAXX010101000",
@@ -44,18 +56,21 @@ func TestOnCompanyCreateAutoSync_LocalInfra_PublishesMetadataAndCompleteCFDIs(t 
 		t.Fatalf("Handle: %v", err)
 	}
 
-	want := []EventType{
-		EventTypeSATMetadataRequested,
-		EventTypeSATCompleteCFDIsNeeded,
-		EventTypeSATCompleteCFDIsNeeded,
+	wantLen := 1 + nCreate + 2
+	if len(rec.sequence) != wantLen {
+		t.Fatalf("got %d publishes, want %d: %v", len(rec.sequence), wantLen, rec.sequence)
 	}
-	if len(rec.sequence) != len(want) {
-		t.Fatalf("got %d publishes, want %d: %v", len(rec.sequence), len(want), rec.sequence)
+	if rec.sequence[0] != EventTypeSATMetadataRequested {
+		t.Fatalf("first event: %s", rec.sequence[0])
 	}
-	for i, et := range want {
-		if rec.sequence[i] != et {
-			t.Errorf("publish[%d]: got %s, want %s", i, rec.sequence[i], et)
+	for i := 1; i <= nCreate; i++ {
+		if rec.sequence[i] != EventTypeSATWSRequestCreateQuery {
+			t.Fatalf("publish[%d]: want create-query, got %s", i, rec.sequence[i])
 		}
+	}
+	if rec.sequence[1+nCreate] != EventTypeSATCompleteCFDIsNeeded ||
+		rec.sequence[2+nCreate] != EventTypeSATCompleteCFDIsNeeded {
+		t.Fatalf("complete events: %v", rec.sequence[1+nCreate:])
 	}
 
 	meta, ok := rec.payloads[0].(SQSCompanySendMetadata)
@@ -63,18 +78,17 @@ func TestOnCompanyCreateAutoSync_LocalInfra_PublishesMetadataAndCompleteCFDIs(t 
 		t.Fatalf("metadata payload: %+v", rec.payloads[0])
 	}
 
-	for i := 1; i <= 2; i++ {
-		nc, ok := rec.payloads[i].(NeedToCompleteCFDIsEvent)
-		if !ok || nc.IsManual {
-			t.Fatalf("complete CFDIs payload[%d]: %+v", i, rec.payloads[i])
-		}
+	q1 := rec.payloads[1].(QueryCreateEvent)
+	if q1.CompanyIdentifier != "00000000-0000-0000-0000-000000000001" || q1.WID != 42 || q1.CID != 7 {
+		t.Fatalf("first create-query: %+v", q1)
 	}
-	issued := rec.payloads[1].(NeedToCompleteCFDIsEvent)
-	recv := rec.payloads[2].(NeedToCompleteCFDIsEvent)
-	if issued.DownloadType != "ISSUED" || recv.DownloadType != "RECEIVED" {
-		t.Fatalf("download types: issued=%q received=%q", issued.DownloadType, recv.DownloadType)
+
+	completeIssued := rec.payloads[1+nCreate].(NeedToCompleteCFDIsEvent)
+	completeRecv := rec.payloads[2+nCreate].(NeedToCompleteCFDIsEvent)
+	if completeIssued.DownloadType != "ISSUED" || completeRecv.DownloadType != "RECEIVED" {
+		t.Fatalf("download types: issued=%q received=%q", completeIssued.DownloadType, completeRecv.DownloadType)
 	}
-	if issued.Start == nil || recv.Start == nil {
+	if completeIssued.Start == nil || completeRecv.Start == nil {
 		t.Fatal("expected Start on complete-CFDI events")
 	}
 }
@@ -83,21 +97,31 @@ func TestOnCompanyCreateAutoSync_NonLocal_PublishesScrap(t *testing.T) {
 	bus := NewBus(false)
 	var rec seqRecorder
 	rec.subscribe(bus, EventTypeSATMetadataRequested)
+	rec.subscribe(bus, EventTypeSATWSRequestCreateQuery)
 	rec.subscribe(bus, EventTypeSATCompleteCFDIsNeeded)
 	rec.subscribe(bus, EventTypeRequestScrap)
 
-	h := &OnCompanyCreateAutoSync{Bus: bus, Cfg: &config.Config{LocalInfra: false}}
+	fixedNow := time.Date(2026, 6, 15, 12, 0, 0, 0, time.UTC)
+	start := datetime.LastXFiscalYearsStart(5)
+	endEx := datetime.MXCalendarDate(fixedNow.In(datetime.MexicoCity())).AddDate(0, 0, 1)
+	nCreate := len(datetime.ChunkRangeByDays(start, endEx, initialCompanyCFDIChunkDays)) * 2
+
+	h := &OnCompanyCreateAutoSync{
+		Bus: bus, Cfg: &config.Config{LocalInfra: false},
+		TimeNow: func() time.Time { return fixedNow },
+	}
 	if err := h.Handle(CompanyCreatedEvent{CompanyIdentifier: "cid", CompanyRFC: "RFC", WorkspaceID: 1, CompanyID: 2}); err != nil {
 		t.Fatal(err)
 	}
 
-	if len(rec.sequence) != 4 {
-		t.Fatalf("sequence: %v", rec.sequence)
+	wantLen := 1 + nCreate + 2 + 1
+	if len(rec.sequence) != wantLen {
+		t.Fatalf("sequence len %d want %d: %v", len(rec.sequence), wantLen, rec.sequence)
 	}
-	if rec.sequence[3] != EventTypeRequestScrap {
-		t.Fatalf("last event: %s", rec.sequence[3])
+	if rec.sequence[wantLen-1] != EventTypeRequestScrap {
+		t.Fatalf("last event: %s", rec.sequence[wantLen-1])
 	}
-	if _, ok := rec.payloads[3].(scrapRequestStub); !ok {
-		t.Fatalf("scrap payload type: %T", rec.payloads[3])
+	if _, ok := rec.payloads[wantLen-1].(scrapRequestStub); !ok {
+		t.Fatalf("scrap payload type: %T", rec.payloads[wantLen-1])
 	}
 }

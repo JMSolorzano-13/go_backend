@@ -59,28 +59,9 @@ func (h *VerifyQuery) Handle(ctx context.Context, raw json.RawMessage) error {
 		return fmt.Errorf("unmarshal VerifyQueryMsg: %w", err)
 	}
 
-	// #region agent log — H-A: check sent_date before/after enrichment
-	slog.Warn("DEBUG-610744: verify_query raw",
-		"query", msg.QueryIdentifier,
-		"sent_date_from_json", msg.SentDate,
-		"sent_date_is_zero", msg.SentDate.IsZero(),
-		"raw_body_len", len(raw),
-	)
-	// #endregion
-
 	if err := h.enrichSentDateIfMissing(ctx, &msg); err != nil {
 		return err
 	}
-
-	// #region agent log — H-A/H-D: check after enrichment
-	slog.Warn("DEBUG-610744: verify_query after_enrich",
-		"query", msg.QueryIdentifier,
-		"sent_date_final", msg.SentDate,
-		"sent_date_is_zero", msg.SentDate.IsZero(),
-		"ws_max_wait", h.Cfg.WSMaxWaitingMinutes,
-		"elapsed_now", time.Since(msg.SentDate),
-	)
-	// #endregion
 
 	logger := slog.With(
 		"handler", "VerifyQuery",
@@ -246,17 +227,6 @@ func (h *VerifyQuery) retryOrTimeout(msg VerifyQueryMsg, logger *slog.Logger) er
 		maxWait = defaultWSMaxWait
 	}
 
-	// #region agent log — H-A/H-B: critical decision point
-	slog.Warn("DEBUG-610744: retryOrTimeout",
-		"query", msg.QueryIdentifier,
-		"sent_date", msg.SentDate,
-		"now", now,
-		"elapsed", elapsed,
-		"max_wait", maxWait,
-		"will_timeout", elapsed >= maxWait,
-	)
-	// #endregion
-
 	if elapsed >= maxWait {
 		logger.Warn("time limit reached", "elapsed", elapsed, "max_wait", maxWait)
 		ctx := context.Background()
@@ -273,14 +243,6 @@ func (h *VerifyQuery) retryOrTimeout(msg VerifyQueryMsg, logger *slog.Logger) er
 		return h.updateQueryState(ctx, msg, tenant.QueryStateTimeLimitReached, 0, nil)
 	}
 
-	// #region agent log — verify retry scheduling
-	slog.Warn("DEBUG-610744: scheduling_retry",
-		"query", msg.QueryIdentifier,
-		"delay", delay,
-		"execute_at", now.Add(delay),
-		"elapsed", elapsed,
-	)
-	// #endregion
 	return h.publishVerifyRetry(msg, now.Add(delay))
 }
 

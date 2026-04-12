@@ -317,6 +317,21 @@ func (h *Company) UploadCer(w http.ResponseWriter, r *http.Request) {
 		if !hasOther {
 			h.bus.Publish(event.EventTypeRequestRestoreTrial, user)
 		}
+		// First FIEL on an existing company row (shell / non-create flows): same SAT bootstrap as create.
+		rfc := ""
+		if companyObj.RFC != nil {
+			rfc = *companyObj.RFC
+		}
+		wsID := int64(0)
+		if companyObj.WorkspaceID != nil {
+			wsID = *companyObj.WorkspaceID
+		}
+		h.bus.Publish(event.EventTypeCompanyCreated, event.CompanyCreatedEvent{
+			CompanyIdentifier: companyObj.Identifier,
+			CompanyRFC:        rfc,
+			WorkspaceID:       wsID,
+			CompanyID:         companyObj.ID,
+		})
 	}
 
 	response.WriteJSON(w, http.StatusOK, map[string]string{"Successful": "Fiel Uploaded"})

@@ -5,6 +5,8 @@ import (
 	"time"
 
 	"github.com/siigofiscal/go_backend/internal/config"
+	"github.com/siigofiscal/go_backend/internal/domain/datetime"
+	tenant "github.com/siigofiscal/go_backend/internal/model/tenant"
 )
 
 // LogRegistrations logs a summary of registered handlers at startup (WARN level
@@ -37,9 +39,21 @@ type CompanyCreatedEvent struct {
 // Mirrors Python's OnCompanyCreateAutoSync in chalicelib/bus.py.
 // -----------------------------------------------------------------------
 
+// initialCompanyCFDIChunkDays matches POST /api/admin/sat-enqueue default for CFDI requests.
+const initialCompanyCFDIChunkDays = 90
+
 type OnCompanyCreateAutoSync struct {
 	Bus *Bus
 	Cfg *config.Config
+	// TimeNow is optional (tests); production uses time.Now.
+	TimeNow func() time.Time
+}
+
+func (h *OnCompanyCreateAutoSync) now() time.Time {
+	if h != nil && h.TimeNow != nil {
+		return h.TimeNow()
+	}
+	return time.Now()
 }
 
 func (h *OnCompanyCreateAutoSync) Handle(ev DomainEvent) error {
@@ -49,7 +63,7 @@ func (h *OnCompanyCreateAutoSync) Handle(ev DomainEvent) error {
 		return nil
 	}
 
-	start := lastXFiscalYears(5)
+	start := datetime.LastXFiscalYearsStart(5)
 
 	h.Bus.Publish(EventTypeSATMetadataRequested, SQSCompanySendMetadata{
 		CompanyBase:       NewCompanyBase(company.CompanyIdentifier, company.CompanyRFC),
@@ -58,15 +72,50 @@ func (h *OnCompanyCreateAutoSync) Handle(ev DomainEvent) error {
 		CID:               company.CompanyID,
 	})
 
+	endExclusive := datetime.MXCalendarDate(h.now().In(datetime.MexicoCity())).AddDate(0, 0, 1)
+	chunks := datetime.ChunkRangeByDays(start, endExclusive, initialCompanyCFDIChunkDays)
+	slog.Warn("company_create_auto_sync",
+		"company_identifier", company.CompanyIdentifier,
+		"cfdi_chunk_windows", len(chunks),
+		"range_start", start.Format(time.RFC3339),
+		"range_end_exclusive", endExclusive.Format(time.RFC3339),
+	)
+
+	for _, ch := range chunks {
+		cs, ce := ch.Start, ch.End
+		h.Bus.Publish(EventTypeSATWSRequestCreateQuery, QueryCreateEvent{
+			SQSBase:           NewSQSBase(),
+			CompanyIdentifier: company.CompanyIdentifier,
+			DownloadType:      tenant.DownloadTypeIssued,
+			RequestType:       tenant.RequestTypeCFDI,
+			IsManual:          false,
+			Start:             &cs,
+			End:               &ce,
+			WID:               company.WorkspaceID,
+			CID:               company.CompanyID,
+		})
+		h.Bus.Publish(EventTypeSATWSRequestCreateQuery, QueryCreateEvent{
+			SQSBase:           NewSQSBase(),
+			CompanyIdentifier: company.CompanyIdentifier,
+			DownloadType:      tenant.DownloadTypeReceived,
+			RequestType:       tenant.RequestTypeCFDI,
+			IsManual:          false,
+			Start:             &cs,
+			End:               &ce,
+			WID:               company.WorkspaceID,
+			CID:               company.CompanyID,
+		})
+	}
+
 	h.Bus.Publish(EventTypeSATCompleteCFDIsNeeded, NeedToCompleteCFDIsEvent{
 		CompanyBase:  NewCompanyBase(company.CompanyIdentifier, company.CompanyRFC),
-		DownloadType: "ISSUED",
+		DownloadType: tenant.DownloadTypeIssued,
 		IsManual:     false,
 		Start:        &start,
 	})
 	h.Bus.Publish(EventTypeSATCompleteCFDIsNeeded, NeedToCompleteCFDIsEvent{
 		CompanyBase:  NewCompanyBase(company.CompanyIdentifier, company.CompanyRFC),
-		DownloadType: "RECEIVED",
+		DownloadType: tenant.DownloadTypeReceived,
 		IsManual:     false,
 		Start:        &start,
 	})
@@ -84,12 +133,6 @@ func (h *OnCompanyCreateAutoSync) Handle(ev DomainEvent) error {
 		CompanyID:         company.CompanyID,
 	})
 	return nil
-}
-
-// lastXFiscalYears returns Jan 1 of (current year - years) at midnight (Mexico time approximated as UTC-6).
-func lastXFiscalYears(years int) time.Time {
-	now := time.Now().UTC().Add(-6 * time.Hour) // rough MX offset
-	return time.Date(now.Year()-years, time.January, 1, 0, 0, 0, 0, time.UTC)
 }
 
 // -----------------------------------------------------------------------

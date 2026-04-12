@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/siigofiscal/go_backend/internal/config"
+	"github.com/siigofiscal/go_backend/internal/domain/datetime"
 	"github.com/siigofiscal/go_backend/internal/domain/event"
 	"github.com/siigofiscal/go_backend/internal/response"
 )
@@ -99,12 +100,12 @@ func (h *AdminSATEnqueue) Enqueue(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	chunks := chunkTimeRange(startUTC, endUTC, chunkDays)
+	chunks := datetime.ChunkRangeByDays(startUTC, endUTC, chunkDays)
 	published := 0
 	for _, c := range chunks {
 		for _, dl := range dlTypes {
-			cs := c.start
-			ce := c.end
+			cs := c.Start
+			ce := c.End
 			h.bus.Publish(event.EventTypeSATWSRequestCreateQuery, event.QueryCreateEvent{
 				SQSBase:           event.NewSQSBase(),
 				CompanyIdentifier: req.CompanyIdentifier,
@@ -146,24 +147,4 @@ func resolveDownloadTypes(dt string) []string {
 	default:
 		return nil
 	}
-}
-
-type timeChunk struct {
-	start time.Time
-	end   time.Time
-}
-
-func chunkTimeRange(start, endExclusive time.Time, days int) []timeChunk {
-	var chunks []timeChunk
-	cursor := start
-	delta := time.Duration(days) * 24 * time.Hour
-	for cursor.Before(endExclusive) {
-		ce := cursor.Add(delta)
-		if ce.After(endExclusive) {
-			ce = endExclusive
-		}
-		chunks = append(chunks, timeChunk{start: cursor, end: ce})
-		cursor = ce
-	}
-	return chunks
 }

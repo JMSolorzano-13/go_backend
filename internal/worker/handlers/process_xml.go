@@ -64,14 +64,6 @@ func (h *ProcessXML) Handle(ctx context.Context, raw json.RawMessage) error {
 		"packages", len(msg.Packages),
 	)
 
-	// #region agent log — DEBUG-610744: confirm packages in process_xml
-	slog.Warn("DEBUG-610744: process_xml received",
-		"query", msg.QueryIdentifier,
-		"packages_count", len(msg.Packages),
-		"packages", msg.Packages,
-	)
-	// #endregion
-
 	companyRFC, err := h.getCompanyRFC(ctx, msg.CompanyIdentifier)
 	if err != nil {
 		return fmt.Errorf("get company RFC: %w", err)
