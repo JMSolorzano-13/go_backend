@@ -122,6 +122,64 @@ func (a *Auth) RequireAdmin(next http.HandlerFunc) http.HandlerFunc {
 	})
 }
 
+// RequireAdminOrCompanyOperator allows ADMIN_EMAILS users, or any authenticated user
+// with OPERATOR permission on the company identified in the JSON body or
+// company_identifier header (same rules as RequireCompany).
+func (a *Auth) RequireAdminOrCompanyOperator(next http.HandlerFunc) http.HandlerFunc {
+	return a.RequireAuth(func(w http.ResponseWriter, r *http.Request) {
+		user, _ := auth.UserFromContext(r.Context())
+
+		body := make(map[string]interface{})
+		if r.Body != nil && r.Method != http.MethodGet && r.Method != http.MethodHead {
+			raw, err := io.ReadAll(r.Body)
+			r.Body.Close()
+			if err == nil && len(raw) > 0 {
+				_ = json.Unmarshal(raw, &body)
+			}
+			r.Body = io.NopCloser(bytes.NewReader(raw))
+		}
+
+		if auth.IsAdmin(user.Email, a.cfg.AdminEmails) {
+			ctx := auth.WithJSONBody(r.Context(), body)
+			next.ServeHTTP(w, r.WithContext(ctx))
+			return
+		}
+
+		cid := extractCompanyIdentifier(r, body)
+		if cid == "" {
+			response.Forbidden(w, "company_identifier is required for non-admin users")
+			return
+		}
+
+		var company control.Company
+		err := a.database.Primary.NewSelect().
+			Model(&company).
+			Where("identifier = ?", cid).
+			Limit(1).
+			Scan(r.Context())
+		if err != nil {
+			response.Forbidden(w, "No company found with the given identifier")
+			return
+		}
+
+		count, err := a.database.Primary.NewSelect().
+			Model((*control.Permission)(nil)).
+			Where("user_id = ?", user.ID).
+			Where("company_id = ?", company.ID).
+			Where("role = ?", control.RoleOperator).
+			Count(r.Context())
+		if err != nil || count == 0 {
+			response.Forbidden(w, "Only admin users or company operators can perform this action")
+			return
+		}
+
+		ctx := auth.WithCompanyIdentifier(r.Context(), cid)
+		ctx = auth.WithCompany(ctx, &company)
+		ctx = auth.WithJSONBody(ctx, body)
+		next.ServeHTTP(w, r.WithContext(ctx))
+	})
+}
+
 // RequireAdminCreate is like RequireAdmin but returns 401 instead of 403
 // (matches Python's get_admin_create_user dependency).
 func (a *Auth) RequireAdminCreate(next http.HandlerFunc) http.HandlerFunc {
