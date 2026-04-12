@@ -139,6 +139,10 @@ func New(cfg *config.Config, database *db.Database, bus *event.Bus, files port.F
 	mux.HandleFunc("POST /api/SATQuery/log", authMW.RequireCompany(satQueryH.Log))
 	mux.HandleFunc("POST /api/SATQuery/massive_scrap", authMW.RequireAuth(satQueryH.MassiveScrap))
 
+	// --- Admin: SAT enqueue (chunked create-query via bus) ---
+	adminSATH := handler.NewAdminSATEnqueue(cfg, bus)
+	mux.HandleFunc("POST /api/admin/sat-enqueue", authMW.RequireAdmin(adminSATH.Enqueue))
+
 	// --- Phase 10: Scraper (2 endpoints) ---
 	scraperH := handler.NewScraper(cfg, database, bus, files)
 	mux.HandleFunc("POST /api/Scraper/scrap_sat_pdf", authMW.RequireCompany(scraperH.ScrapSatPDF))

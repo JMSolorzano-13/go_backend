@@ -9,6 +9,7 @@ import (
 
 	"github.com/uptrace/bun"
 
+	"github.com/siigofiscal/go_backend/internal/domain/datetime"
 	"github.com/siigofiscal/go_backend/internal/domain/event"
 	"github.com/siigofiscal/go_backend/internal/model/control"
 	tenant "github.com/siigofiscal/go_backend/internal/model/tenant"
@@ -43,7 +44,7 @@ func (h *CompleteCFDIs) Handle(ctx context.Context, raw json.RawMessage) error {
 
 	// Determine date range.
 	now := time.Now().UTC()
-	start := derefTime(msg.Start, lastXFiscalYears(5))
+	start := derefTime(msg.Start, datetime.LastXFiscalYearsStart(5))
 	end := derefTime(msg.End, now)
 
 	// Get company to look up wid/cid.
@@ -139,8 +140,8 @@ func (h *CompleteCFDIs) getCFDIChunks(ctx context.Context, conn bun.Conn, isIssu
 
 	// Query all dates (with flag indicating need-download) ordered by Fecha.
 	type dateRow struct {
-		Fecha      time.Time `bun:"Fecha"`
-		NeedDownload bool    `bun:"need_download"`
+		Fecha        time.Time `bun:"Fecha"`
+		NeedDownload bool      `bun:"need_download"`
 	}
 
 	var dates []dateRow
@@ -193,10 +194,4 @@ func (h *CompleteCFDIs) getCFDIChunks(ctx context.Context, conn bun.Conn, isIssu
 	}
 
 	return chunks, nil
-}
-
-// lastXFiscalYears returns Jan 1 of (current year - years).
-func lastXFiscalYears(years int) time.Time {
-	now := time.Now().UTC()
-	return time.Date(now.Year()-years, time.January, 1, 0, 0, 0, 0, time.UTC)
 }
