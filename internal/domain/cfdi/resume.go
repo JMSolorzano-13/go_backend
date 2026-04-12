@@ -330,6 +330,15 @@ func ComputeResume(ctx context.Context, db bun.IDB, domain []interface{}, fuzzyS
 	q = appendFuzzyClause(q, fuzzySearch)
 
 	rows, err := db.QueryContext(ctx, q)
+	// #region agent log
+	debugResumeNDJSON(map[string]interface{}{
+		"hypothesisId": "H-computeSQL",
+		"location":     "resume.go:ComputeResume",
+		"message":      "compute resume SQL",
+		"whereClause":  whereClause,
+		"queryErr":     fmt.Sprintf("%v", err),
+	})
+	// #endregion
 	if err != nil {
 		return map[string]interface{}{}
 	}
@@ -337,6 +346,14 @@ func ComputeResume(ctx context.Context, db bun.IDB, domain []interface{}, fuzzyS
 
 	cols, _ := rows.Columns()
 	if !rows.Next() {
+		// #region agent log
+		debugResumeNDJSON(map[string]interface{}{
+			"hypothesisId": "H-computeSQL",
+			"location":     "resume.go:ComputeResume",
+			"message":      "rows.Next() = false (no rows)",
+			"whereClause":  whereClause,
+		})
+		// #endregion
 		return map[string]interface{}{}
 	}
 
