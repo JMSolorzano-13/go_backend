@@ -35,11 +35,14 @@ func debugResumeNDJSON(payload map[string]interface{}) {
 	if err != nil {
 		return
 	}
+	line := append(b, '\n')
+	// Write to local file (dev) and always echo to stderr so ACA logs capture it
+	fmt.Fprintf(os.Stderr, "DEBUG_RESUME %s", line)
 	f, err := os.OpenFile(debugResumeLogPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
 	if err != nil {
 		return
 	}
-	_, _ = f.Write(append(b, '\n'))
+	_, _ = f.Write(line)
 	_ = f.Close()
 }
 
@@ -424,6 +427,16 @@ func CFDIResume(ctx context.Context, db bun.IDB, domain []interface{}, fuzzySear
 		} else {
 			maxFecha, _ := queryMaxFechaFiltro(ctx, db, domain, fuzzySearch)
 			exerciseDomain := domainCopyForExercise(domain, maxFecha)
+			// #region agent log
+			exerciseDomainJSON, _ := json.Marshal(exerciseDomain)
+			debugResumeNDJSON(map[string]interface{}{
+				"hypothesisId":  "H-exerciseDomain",
+				"location":      "resume.go:CFDIResume",
+				"message":       "exercise domain built",
+				"exerciseDomain": string(exerciseDomainJSON),
+				"maxFechaValid": maxFecha.Valid,
+			})
+			// #endregion
 			exercise = ComputeResume(ctx, db, exerciseDomain, fuzzySearch, resumeType)
 			if len(exercise) == 0 {
 				exercise = filtered
