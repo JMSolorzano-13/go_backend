@@ -53,18 +53,33 @@ func (h *ProcessMetadata) Handle(ctx context.Context, raw json.RawMessage) error
 		return fmt.Errorf("unmarshal ProcessQueryMsg: %w", err)
 	}
 
+	conn, err := h.DB.TenantConn(ctx, msg.CompanyIdentifier, false)
+	if err != nil {
+		return fmt.Errorf("tenant conn: %w", err)
+	}
+	defer conn.Close()
+
+	// Fallback: if packages not in the message, load from sat_query row.
+	if len(msg.Packages) == 0 {
+		var row tenant.SATQuery
+		if scanErr := conn.NewSelect().
+			Model(&row).
+			Column("packages").
+			Where("identifier = ?", msg.QueryIdentifier).
+			Scan(ctx); scanErr == nil && len(row.Packages) > 0 {
+			var pkgs []string
+			if jErr := json.Unmarshal(row.Packages, &pkgs); jErr == nil {
+				msg.Packages = pkgs
+			}
+		}
+	}
+
 	logger := slog.With(
 		"handler", "ProcessMetadata",
 		"company", msg.CompanyIdentifier,
 		"query", msg.QueryIdentifier,
 		"packages", len(msg.Packages),
 	)
-
-	conn, err := h.DB.TenantConn(ctx, msg.CompanyIdentifier, false)
-	if err != nil {
-		return fmt.Errorf("tenant conn: %w", err)
-	}
-	defer conn.Close()
 
 	// Determine company RFC by looking at the company in control DB.
 	companyRFC, err := h.getCompanyRFC(ctx, msg.CompanyIdentifier)

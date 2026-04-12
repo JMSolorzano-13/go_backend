@@ -76,11 +76,11 @@ func (h *CompleteCFDIs) Handle(ctx context.Context, raw json.RawMessage) error {
 	}
 
 	if len(chunks) == 0 {
-		logger.Info("no CFDIs need XML download")
+		logger.Warn("no CFDIs need XML download")
 		return nil
 	}
 
-	logger.Info("publishing create-query events for CFDI chunks", "chunks", len(chunks))
+	logger.Warn("publishing create-query events for CFDI chunks", "chunks", len(chunks))
 
 	for _, chunk := range chunks {
 		chunkStart := chunk.start
@@ -98,7 +98,7 @@ func (h *CompleteCFDIs) Handle(ctx context.Context, raw json.RawMessage) error {
 		})
 	}
 
-	logger.Info("complete_cfdis done", "chunks_published", len(chunks))
+	logger.Warn("complete_cfdis done", "chunks_published", len(chunks))
 	return nil
 }
 

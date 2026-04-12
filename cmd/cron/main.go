@@ -84,7 +84,7 @@ func run(job string) error {
 		publishCompleteCFDIs(bus, companies)
 	}
 
-	slog.Info("go-cron: done", "job", job, "companies", len(companies))
+	slog.Warn("go-cron: done", "job", job, "companies", len(companies))
 	return nil
 }
 

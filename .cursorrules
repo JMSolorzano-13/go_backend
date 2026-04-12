@@ -6,6 +6,8 @@
 
 **Critical Constraint**: All HTTP responses MUST maintain Chalice-shaped error format `{"Code": "ErrorClass", "Message": "detail"}` for frontend compatibility. Route paths, parameter names, and response structures are immutable.
 
+**Local vs Azure DB:** Docker Postgres + LocalStack + local `cmd/worker` are for **local testing only**. To inspect **Azure** PostgreSQL, use **Azure CLI** + SSH tunnel + Key Vault — see repo **`.cursor/rules/azure-database-and-local-infra.mdc`** (parent directory).
+
 ---
 
 ## Tech Stack
@@ -77,7 +79,7 @@ go_backend/
 
 1. **Layered / ports-adapters**: Handlers and `infra/` talk to AWS/Azure; **`internal/domain/port`** defines `FileStorage` and `MessagePublisher`. **Exception:** `internal/domain/crud` is intentionally coupled to **`bun.IDB`** (generic search engine — same as production reality). Prefer keeping new **pure** business rules free of `net/http` and cloud SDKs; use ports for new external integrations.
 2. **Multi-Tenant Database**: Per-company PostgreSQL schemas with `SET search_path TO "company_identifier"` isolation
-3. **Event-Driven Communication**: EventBus publishes domain events to SQS handlers (async processing)
+3. **Event-Driven Communication**: EventBus publishes domain events to SQS / Azure Service Bus queues via `internal/infra/sqs` (`SubscribeAllHandlers`). **Full SAT pipeline reference (queues, handlers, env, diagrams, Azure pitfalls):** repo root **`SAT_DOWNLOAD_PIPELINE.md`** (one level above `go_backend/`). Before changing verify/download/XML flow, read that doc and `internal/infra/sqs/register.go`.
 4. **CRUD Engine**: Generic `crud.Search` function handles 80% of endpoints (domain filters, fuzzy search, pagination)
 5. **Middleware-Based Auth**: `RequireAuth`, `RequireCompany`, `RequireAdmin`, `RequireAdminCreate` wrap handlers
 

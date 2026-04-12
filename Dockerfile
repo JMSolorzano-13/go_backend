@@ -14,12 +14,13 @@ RUN CGO_ENABLED=0 GOOS=linux go build -ldflags="-s -w" -o /go-backend ./cmd/serv
     CGO_ENABLED=0 GOOS=linux go build -ldflags="-s -w" -o /cron ./cmd/cron
 
 # ---------------------------------------------------------------------------
-# Dev image — alpine with shell for debugging
+# Dev image — alpine with shell for debugging (all binaries)
 # ---------------------------------------------------------------------------
 FROM alpine:3.19 AS dev
 RUN apk add --no-cache ca-certificates tzdata curl
 COPY --from=builder /go-backend /usr/local/bin/go-backend
 COPY --from=builder /go-worker /usr/local/bin/go-worker
+COPY --from=builder /cron /cron
 EXPOSE 8001
 ENTRYPOINT ["go-backend"]
 
@@ -30,6 +31,7 @@ FROM alpine:3.19 AS dev-worker
 RUN apk add --no-cache ca-certificates tzdata curl
 COPY --from=builder /go-backend /usr/local/bin/go-backend
 COPY --from=builder /go-worker /usr/local/bin/go-worker
+COPY --from=builder /cron /cron
 ENTRYPOINT ["go-worker"]
 
 # ---------------------------------------------------------------------------

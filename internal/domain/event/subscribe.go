@@ -137,13 +137,15 @@ func (h *OnFirstCompanyCreatedRestoreTrial) Handle(ev DomainEvent) error {
 // Mirrors Python's OnQueryReadyToDownloadProcessQuery in chalicelib/bus.py.
 // -----------------------------------------------------------------------
 
-// QueryDownloadedEvent is published by the SAT WS download lambda (scrapercfdi).
-// The backend only produces this event via SAT query routes (Phase 10).
+// QueryDownloadedEvent is published by the SAT WS download handler after all
+// package ZIPs have been stored in blob. Packages are forwarded so that the
+// downstream ProcessXML / ProcessMetadata handler knows which ZIPs to fetch.
 type QueryDownloadedEvent struct {
 	SQSBase
 	CompanyIdentifier string     `json:"company_identifier"`
 	QueryIdentifier   string     `json:"query_identifier"`
 	RequestType       string     `json:"request_type"` // "METADATA" | "CFDI"
+	Packages          []string   `json:"packages,omitempty"`
 	ExecuteAtOverride *time.Time `json:"execute_at_override,omitempty"`
 }
 

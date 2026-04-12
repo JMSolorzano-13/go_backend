@@ -62,6 +62,6 @@ func (h *SendQueryMetadata) Handle(ctx context.Context, raw json.RawMessage) err
 		CID:               msg.CID,
 	})
 
-	logger.Info("published metadata create-query events", "start", start, "end", end)
+	logger.Warn("published metadata create-query events", "start", start, "end", end)
 	return nil
 }

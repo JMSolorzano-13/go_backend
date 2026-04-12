@@ -32,6 +32,11 @@ func NewSQSBase() SQSBase {
 	return SQSBase{Identifier: uuid.NewString()}
 }
 
+// GetExecuteAt satisfies the interface checked by the SQS handler for scheduled delivery.
+func (b SQSBase) GetExecuteAt() *time.Time {
+	return b.ExecuteAt
+}
+
 // CompanyBase carries the company context common to most SAT/ADD events.
 type CompanyBase struct {
 	SQSBase
@@ -82,6 +87,7 @@ type QueryCreateEvent struct {
 }
 
 // QueryVerifyEvent mirrors the internal Query object published for reverification.
+// When used for DOWNLOAD_READY, Packages and CfdisQty carry the SAT verify result.
 type QueryVerifyEvent struct {
 	SQSBase
 	CompanyIdentifier string    `json:"company_identifier"`
@@ -96,6 +102,8 @@ type QueryVerifyEvent struct {
 	IsManual          bool      `json:"is_manual"`
 	WID               int64     `json:"wid"`
 	CID               int64     `json:"cid"`
+	Packages          []string  `json:"packages,omitempty"`
+	CfdisQty          int64     `json:"cfdis_qty,omitempty"`
 }
 
 // ScrapRequestEvent is published for EventTypeRequestScrap from manual/massive endpoints.

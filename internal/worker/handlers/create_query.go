@@ -68,7 +68,7 @@ func (h *CreateQuery) Handle(ctx context.Context, raw json.RawMessage) error {
 		return fmt.Errorf("insert sat_query: %w", err)
 	}
 
-	logger.Info("sat_query created", "query_id", queryID)
+	logger.Warn("sat_query created", "query_id", queryID)
 
 	// 2. Load FIEL and create SAT connector.
 	connector, err := h.loadFIEL(ctx, msg.WID, msg.CID)
@@ -102,7 +102,7 @@ func (h *CreateQuery) Handle(ctx context.Context, raw json.RawMessage) error {
 		return fmt.Errorf("update sat_query to SENT: %w", err)
 	}
 
-	logger.Info("sat_query sent", "sat_id", satQuery.Identifier)
+	logger.Warn("sat_query sent", "sat_id", satQuery.Identifier)
 
 	// 5. Publish SAT_WS_QUERY_SENT → triggers verify.
 	h.Bus.Publish(event.EventTypeSATWSQuerySent, event.QueryVerifyEvent{

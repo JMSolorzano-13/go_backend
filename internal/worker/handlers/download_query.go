@@ -36,6 +36,15 @@ func (h *DownloadQuery) Handle(ctx context.Context, raw json.RawMessage) error {
 		"packages", len(msg.Packages),
 	)
 
+	// #region agent log — DEBUG-610744: confirm packages arrive in download handler
+	slog.Warn("DEBUG-610744: download_query received",
+		"query", msg.QueryIdentifier,
+		"packages_count", len(msg.Packages),
+		"cfdis_qty", msg.CfdisQty,
+		"packages", msg.Packages,
+	)
+	// #endregion
+
 	// Load FIEL.
 	connector, err := h.loadFIEL(ctx, msg.WID, msg.CID)
 	if err != nil {
@@ -102,6 +111,7 @@ func (h *DownloadQuery) Handle(ctx context.Context, raw json.RawMessage) error {
 		CompanyIdentifier: msg.CompanyIdentifier,
 		QueryIdentifier:   msg.QueryIdentifier,
 		RequestType:       msg.RequestType,
+		Packages:          msg.Packages,
 	})
 
 	return nil

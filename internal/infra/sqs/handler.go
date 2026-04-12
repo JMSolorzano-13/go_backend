@@ -15,7 +15,10 @@ import (
 
 const (
 	maxSQSMessageBytes = 256 * 1024 // 256 KB
-	maxDelay           = 15 * time.Minute
+	// maxDelaySQS caps DelaySeconds for AWS SQS (hard limit: 900s = 15 min).
+	// Azure Service Bus ScheduledEnqueueTime has no such limit; the publisher
+	// converts DelaySeconds to an absolute timestamp, so larger values work fine.
+	maxDelaySQS = 15 * time.Minute
 )
 
 // Handler implements event.EventHandler by serializing the event and
@@ -55,14 +58,12 @@ func (h *Handler) Handle(ev interface{}) error {
 		in.MessageDeduplicationID = id
 	}
 
-	// Handle execute_at → DelaySeconds (capped at SQS max = 15min).
+	// Handle execute_at → DelaySeconds.
+	// Azure Service Bus supports arbitrary ScheduledEnqueueTime; only cap for AWS SQS (15 min).
 	if delayed, ok := ev.(interface{ GetExecuteAt() *time.Time }); ok {
 		if execAt := delayed.GetExecuteAt(); execAt != nil {
 			delay := time.Until(*execAt)
 			if delay > 0 {
-				if delay > maxDelay {
-					delay = maxDelay
-				}
 				in.DelaySeconds = int32(delay.Seconds())
 			}
 		}
