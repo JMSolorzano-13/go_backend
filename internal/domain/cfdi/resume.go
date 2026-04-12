@@ -2,7 +2,9 @@ package cfdi
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 
@@ -10,10 +12,10 @@ import (
 )
 
 const (
-	ResumeBasic              = "BASIC"
-	ResumeN                  = "N"
-	ResumeP                  = "P"
-	ResumePaymentWithDoctos  = "PAYMENT_WITH_DOCTOS"
+	ResumeBasic             = "BASIC"
+	ResumeN                 = "N"
+	ResumeP                 = "P"
+	ResumePaymentWithDoctos = "PAYMENT_WITH_DOCTOS"
 )
 
 var resumeFieldsBasic = []string{
@@ -114,6 +116,122 @@ func isHistoricDomain(domain []interface{}) bool {
 	return true
 }
 
+func escapeSQLString(s string) string {
+	return strings.ReplaceAll(s, "'", "''")
+}
+
+func appendFuzzyClause(q, fuzzySearch string) string {
+	if fuzzySearch == "" {
+		return q
+	}
+	fs := escapeSQLString(fuzzySearch)
+	fuzzyFields := []string{`"NombreEmisor"`, `"NombreReceptor"`, `"RfcEmisor"`, `"RfcReceptor"`, `"UUID"`}
+	concat := `CONCAT(` + strings.Join(fuzzyFields, `,' ',`) + `)`
+	return q + fmt.Sprintf(` AND unaccent(%s) ILIKE unaccent('%%%s%%')`, concat, fs)
+}
+
+func parseDomainTime(v interface{}) (time.Time, bool) {
+	switch t := v.(type) {
+	case time.Time:
+		return t, true
+	case string:
+		s := strings.TrimSpace(t)
+		layouts := []string{
+			time.RFC3339Nano,
+			time.RFC3339,
+			"2006-01-02T15:04:05.000",
+			"2006-01-02T15:04:05",
+			"2006-01-02",
+		}
+		for _, l := range layouts {
+			if tt, err := time.Parse(l, s); err == nil {
+				return tt, true
+			}
+		}
+		if strings.HasSuffix(s, "Z") {
+			if tt, err := time.Parse(time.RFC3339Nano, s); err == nil {
+				return tt, true
+			}
+		}
+	case []byte:
+		return parseDomainTime(string(t))
+	}
+	return time.Time{}, false
+}
+
+func collectFechaFiltroLowerStarts(domain []interface{}) []time.Time {
+	var starts []time.Time
+	for _, d := range domain {
+		triple, ok := d.([]interface{})
+		if !ok || len(triple) < 3 {
+			continue
+		}
+		field, _ := triple[0].(string)
+		op, _ := triple[1].(string)
+		if field != "FechaFiltro" || (op != ">" && op != ">=") {
+			continue
+		}
+		if ts, ok2 := parseDomainTime(triple[2]); ok2 {
+			starts = append(starts, ts)
+		}
+	}
+	sort.Slice(starts, func(i, j int) bool { return starts[i].Before(starts[j]) })
+	return starts
+}
+
+func stripFechaFiltroLowerBounds(domain []interface{}) []interface{} {
+	newDomain := make([]interface{}, 0, len(domain)+1)
+	for _, d := range domain {
+		triple, ok := d.([]interface{})
+		if !ok || len(triple) < 2 {
+			newDomain = append(newDomain, d)
+			continue
+		}
+		field, _ := triple[0].(string)
+		op, _ := triple[1].(string)
+		if field == "FechaFiltro" && (op == ">" || op == ">=") {
+			continue
+		}
+		newDomain = append(newDomain, d)
+	}
+	return newDomain
+}
+
+// domainCopyForExercise mirrors Python _get_domain_with_normalized_FechaFiltro_begin_exercise:
+// drop lower FechaFiltro bounds, then add FechaFiltro >= Jan 1 of the exercise year derived from
+// the earliest explicit lower bound, else from MAX(FechaFiltro) when provided.
+func domainCopyForExercise(domain []interface{}, maxFecha sql.NullTime) []interface{} {
+	starts := collectFechaFiltroLowerStarts(domain)
+	newDomain := stripFechaFiltroLowerBounds(domain)
+
+	var anchor time.Time
+	var have bool
+	if len(starts) > 0 {
+		anchor, have = starts[0], true
+	} else if maxFecha.Valid {
+		anchor, have = maxFecha.Time, true
+	}
+	if !have {
+		return newDomain
+	}
+	y := anchor.UTC().Year()
+	jan1 := time.Date(y, 1, 1, 0, 0, 0, 0, time.UTC)
+	newDomain = append(newDomain, []interface{}{"FechaFiltro", ">=", jan1.Format("2006-01-02T15:04:05")})
+	return newDomain
+}
+
+func queryMaxFechaFiltro(ctx context.Context, db bun.IDB, domain []interface{}, fuzzySearch string) (sql.NullTime, error) {
+	domainWhere := buildDomainWhereSQL(domain)
+	where := "TRUE"
+	if domainWhere != "" {
+		where = domainWhere
+	}
+	q := appendFuzzyClause(fmt.Sprintf(`SELECT MAX("FechaFiltro") FROM cfdi WHERE %s`, where), fuzzySearch)
+	var nt sql.NullTime
+	err := db.QueryRowContext(ctx, q).Scan(&nt)
+	return nt, err
+}
+
 // ComputeResume calculates aggregated resume data for CFDIs matching the domain.
 func ComputeResume(ctx context.Context, db bun.IDB, domain []interface{}, fuzzySearch string, resumeType string) map[string]interface{} {
 	paymentsInDomain := hasPaymentsInDomain(domain)
@@ -134,12 +252,7 @@ func ComputeResume(ctx context.Context, db bun.IDB, domain []interface{}, fuzzyS
 	}
 
 	q := fmt.Sprintf("SELECT %s FROM %s WHERE %s", fieldStr, fromClause, whereClause)
-
-	if fuzzySearch != "" {
-		fuzzyFields := []string{`"NombreEmisor"`, `"NombreReceptor"`, `"RfcEmisor"`, `"RfcReceptor"`, `"UUID"`}
-		concat := `CONCAT(` + strings.Join(fuzzyFields, `,' ',`) + `)`
-		q += fmt.Sprintf(` AND unaccent(%s) ILIKE unaccent('%%%s%%')`, concat, fuzzySearch)
-	}
+	q = appendFuzzyClause(q, fuzzySearch)
 
 	rows, err := db.QueryContext(ctx, q)
 	if err != nil {
@@ -157,7 +270,12 @@ func ComputeResume(ctx context.Context, db bun.IDB, domain []interface{}, fuzzyS
 	for i := range vals {
 		ptrs[i] = &vals[i]
 	}
-	rows.Scan(ptrs...)
+	if err := rows.Scan(ptrs...); err != nil {
+		return map[string]interface{}{}
+	}
+	if err := rows.Err(); err != nil {
+		return map[string]interface{}{}
+	}
 
 	result := make(map[string]interface{}, len(cols)+1)
 	for i, col := range cols {
@@ -209,43 +327,17 @@ func CFDIResume(ctx context.Context, db bun.IDB, domain []interface{}, fuzzySear
 	if isHistoricDomain(domain) {
 		exercise = filtered
 	} else {
-		exerciseDomain := getExerciseDomain(ctx, db, domain, fuzzySearch)
+		maxFecha, _ := queryMaxFechaFiltro(ctx, db, domain, fuzzySearch)
+		exerciseDomain := domainCopyForExercise(domain, maxFecha)
 		exercise = ComputeResume(ctx, db, exerciseDomain, fuzzySearch, resumeType)
+		if len(exercise) == 0 {
+			exercise = filtered
+		}
 	}
 	return map[string]interface{}{
 		"filtered":  filtered,
 		"excercise": exercise, // intentional misspelling: matches Python backend + frontend
 	}
-}
-
-func getExerciseDomain(ctx context.Context, db bun.IDB, domain []interface{}, fuzzySearch string) []interface{} {
-	domainWhere := buildDomainWhereSQL(domain)
-	where := "TRUE"
-	if domainWhere != "" {
-		where = domainWhere
-	}
-	q := fmt.Sprintf(`SELECT MAX("FechaFiltro") FROM cfdi WHERE %s`, where)
-
-	var maxDate *time.Time
-	db.QueryRowContext(ctx, q).Scan(&maxDate)
-
-	newDomain := make([]interface{}, 0, len(domain)+1)
-	for _, d := range domain {
-		if triple, ok := d.([]interface{}); ok && len(triple) >= 2 {
-			if field, ok := triple[0].(string); ok && field == "FechaFiltro" {
-				if op, ok := triple[1].(string); ok && (op == ">" || op == ">=") {
-					continue
-				}
-			}
-		}
-		newDomain = append(newDomain, d)
-	}
-
-	if maxDate != nil {
-		exerciseStart := time.Date(maxDate.Year(), 1, 1, 0, 0, 0, 0, time.UTC)
-		newDomain = append(newDomain, []interface{}{"FechaFiltro", ">=", exerciseStart.Format("2006-01-02T15:04:05")})
-	}
-	return newDomain
 }
 
 // CountCFDIsByType returns count grouped by TipoDeComprobante.
