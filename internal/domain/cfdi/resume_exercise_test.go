@@ -38,3 +38,38 @@ func TestDomainCopyForExerciseFallsBackToMaxWhenNoLowerBound(t *testing.T) {
 		t.Fatalf("expected Jan 1 2024 from max date year, got %q", last[2])
 	}
 }
+
+func TestLongResumeWindowSkipsExerciseWidenMarchThroughYearEnd(t *testing.T) {
+	domain := []interface{}{
+		[]interface{}{"FechaFiltro", ">=", "2024-03-01T00:00:00.000"},
+		[]interface{}{"FechaFiltro", "<", "2025-01-01T00:00:00.000"},
+	}
+	if !longResumeWindowSkipsExerciseWiden(domain) {
+		t.Fatal("expected long window (>=300d) to skip exercise widen")
+	}
+}
+
+func TestLongResumeWindowDoesNotSkipForSingleMonth(t *testing.T) {
+	domain := []interface{}{
+		[]interface{}{"FechaFiltro", ">=", "2024-03-01T00:00:00.000"},
+		[]interface{}{"FechaFiltro", "<", "2024-04-01T00:00:00.000"},
+	}
+	if longResumeWindowSkipsExerciseWiden(domain) {
+		t.Fatal("single-month window must not skip exercise widen")
+	}
+}
+
+func TestEarliestFechaFiltroUpper(t *testing.T) {
+	domain := []interface{}{
+		[]interface{}{"FechaFiltro", "<", "2025-06-01T00:00:00.000"},
+		[]interface{}{"FechaFiltro", "<", "2025-01-01T00:00:00.000"},
+	}
+	hi, ok := earliestFechaFiltroUpper(domain)
+	if !ok {
+		t.Fatal("expected upper")
+	}
+	want := time.Date(2025, 1, 1, 0, 0, 0, 0, time.UTC)
+	if !hi.Equal(want) {
+		t.Fatalf("expected min upper %v, got %v", want, hi)
+	}
+}

@@ -3,7 +3,9 @@ package cfdi
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"fmt"
+	"os"
 	"sort"
 	"strings"
 	"time"
@@ -16,7 +18,32 @@ const (
 	ResumeN                 = "N"
 	ResumeP                 = "P"
 	ResumePaymentWithDoctos = "PAYMENT_WITH_DOCTOS"
+
+	// resumeLongSpanMinDays: when the filtered FechaFiltro window is at least this many days,
+	// treat "Acumulado" the same as "Periodo" (no widening to Jan 1). Matches product expectation
+	// for full-year (and year-shaped) ranges where the UI lower bound may start after Jan 1.
+	resumeLongSpanMinDays = 300
 )
+
+// #region agent log
+const debugResumeLogPath = "/Users/juanmanuelsolorzano/Developer/ez/local_siigo_fiscal/.cursor/debug-921a30.log"
+
+func debugResumeNDJSON(payload map[string]interface{}) {
+	payload["sessionId"] = "921a30"
+	payload["timestamp"] = time.Now().UnixMilli()
+	b, err := json.Marshal(payload)
+	if err != nil {
+		return
+	}
+	f, err := os.OpenFile(debugResumeLogPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+	if err != nil {
+		return
+	}
+	_, _ = f.Write(append(b, '\n'))
+	_ = f.Close()
+}
+
+// #endregion
 
 var resumeFieldsBasic = []string{
 	`SUM("SubTotalMXN") AS "SubTotalMXN"`,
@@ -179,6 +206,51 @@ func collectFechaFiltroLowerStarts(domain []interface{}) []time.Time {
 	return starts
 }
 
+// earliestFechaFiltroUpper returns the tightest upper bound from FechaFiltro with op "<" or "<=".
+func earliestFechaFiltroUpper(domain []interface{}) (time.Time, bool) {
+	var best time.Time
+	var found bool
+	for _, d := range domain {
+		triple, ok := d.([]interface{})
+		if !ok || len(triple) < 3 {
+			continue
+		}
+		field, _ := triple[0].(string)
+		op, _ := triple[1].(string)
+		if field != "FechaFiltro" || (op != "<" && op != "<=") {
+			continue
+		}
+		ts, ok2 := parseDomainTime(triple[2])
+		if !ok2 {
+			continue
+		}
+		if !found || ts.Before(best) {
+			best, found = ts, true
+		}
+	}
+	return best, found
+}
+
+// longResumeWindowSkipsExerciseWiden is true when the filtered date window is long enough that
+// widening the lower bound to Jan 1 would mis-label the row as "year cumulative" while the UI
+// already represents a full-year (or near-year) slice — Periodo and Acumulado must match.
+func longResumeWindowSkipsExerciseWiden(domain []interface{}) bool {
+	starts := collectFechaFiltroLowerStarts(domain)
+	if len(starts) == 0 {
+		return false
+	}
+	hi, ok := earliestFechaFiltroUpper(domain)
+	if !ok {
+		return false
+	}
+	lo := starts[0]
+	if !hi.After(lo) {
+		return false
+	}
+	days := int(hi.Sub(lo).Hours() / 24)
+	return days >= resumeLongSpanMinDays
+}
+
 func stripFechaFiltroLowerBounds(domain []interface{}) []interface{} {
 	newDomain := make([]interface{}, 0, len(domain)+1)
 	for _, d := range domain {
@@ -327,12 +399,46 @@ func CFDIResume(ctx context.Context, db bun.IDB, domain []interface{}, fuzzySear
 	if isHistoricDomain(domain) {
 		exercise = filtered
 	} else {
-		maxFecha, _ := queryMaxFechaFiltro(ctx, db, domain, fuzzySearch)
-		exerciseDomain := domainCopyForExercise(domain, maxFecha)
-		exercise = ComputeResume(ctx, db, exerciseDomain, fuzzySearch, resumeType)
-		if len(exercise) == 0 {
-			exercise = filtered
+		longSpan := longResumeWindowSkipsExerciseWiden(domain)
+		// #region agent log
+		starts := collectFechaFiltroLowerStarts(domain)
+		hi, hiOK := earliestFechaFiltroUpper(domain)
+		days := 0
+		if len(starts) > 0 && hiOK && hi.After(starts[0]) {
+			days = int(hi.Sub(starts[0]).Hours() / 24)
 		}
+		debugResumeNDJSON(map[string]interface{}{
+			"hypothesisId":      "H-longSpan",
+			"location":          "resume.go:CFDIResume",
+			"message":           "resume window evaluation",
+			"longSpanSkipWiden": longSpan,
+			"fechaLowerCount":   len(starts),
+			"fechaUpperOk":      hiOK,
+			"approxSpanDays":    days,
+			"resumeType":        resumeType,
+			"filteredCount":     filtered["count"],
+		})
+		// #endregion
+		if longSpan {
+			exercise = filtered
+		} else {
+			maxFecha, _ := queryMaxFechaFiltro(ctx, db, domain, fuzzySearch)
+			exerciseDomain := domainCopyForExercise(domain, maxFecha)
+			exercise = ComputeResume(ctx, db, exerciseDomain, fuzzySearch, resumeType)
+			if len(exercise) == 0 {
+				exercise = filtered
+			}
+		}
+		// #region agent log
+		debugResumeNDJSON(map[string]interface{}{
+			"hypothesisId":  "H-outcome",
+			"location":      "resume.go:CFDIResume",
+			"message":       "resume counts after exercise branch",
+			"longSpanUsed":  longSpan,
+			"filteredCount": filtered["count"],
+			"exerciseCount": exercise["count"],
+		})
+		// #endregion
 	}
 	return map[string]interface{}{
 		"filtered":  filtered,
