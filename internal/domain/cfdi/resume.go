@@ -3,9 +3,7 @@ package cfdi
 import (
 	"context"
 	"database/sql"
-	"encoding/json"
 	"fmt"
-	"os"
 	"sort"
 	"strings"
 	"time"
@@ -24,29 +22,6 @@ const (
 	// for full-year (and year-shaped) ranges where the UI lower bound may start after Jan 1.
 	resumeLongSpanMinDays = 300
 )
-
-// #region agent log
-const debugResumeLogPath = "/Users/juanmanuelsolorzano/Developer/ez/local_siigo_fiscal/.cursor/debug-921a30.log"
-
-func debugResumeNDJSON(payload map[string]interface{}) {
-	payload["sessionId"] = "921a30"
-	payload["timestamp"] = time.Now().UnixMilli()
-	b, err := json.Marshal(payload)
-	if err != nil {
-		return
-	}
-	line := append(b, '\n')
-	// Write to local file (dev) and always echo to stderr so ACA logs capture it
-	fmt.Fprintf(os.Stderr, "DEBUG_RESUME %s", line)
-	f, err := os.OpenFile(debugResumeLogPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
-	if err != nil {
-		return
-	}
-	_, _ = f.Write(line)
-	_ = f.Close()
-}
-
-// #endregion
 
 var resumeFieldsBasic = []string{
 	`SUM("SubTotalMXN") AS "SubTotalMXN"`,
@@ -330,15 +305,6 @@ func ComputeResume(ctx context.Context, db bun.IDB, domain []interface{}, fuzzyS
 	q = appendFuzzyClause(q, fuzzySearch)
 
 	rows, err := db.QueryContext(ctx, q)
-	// #region agent log
-	debugResumeNDJSON(map[string]interface{}{
-		"hypothesisId": "H-computeSQL",
-		"location":     "resume.go:ComputeResume",
-		"message":      "compute resume SQL",
-		"whereClause":  whereClause,
-		"queryErr":     fmt.Sprintf("%v", err),
-	})
-	// #endregion
 	if err != nil {
 		return map[string]interface{}{}
 	}
@@ -346,14 +312,6 @@ func ComputeResume(ctx context.Context, db bun.IDB, domain []interface{}, fuzzyS
 
 	cols, _ := rows.Columns()
 	if !rows.Next() {
-		// #region agent log
-		debugResumeNDJSON(map[string]interface{}{
-			"hypothesisId": "H-computeSQL",
-			"location":     "resume.go:ComputeResume",
-			"message":      "rows.Next() = false (no rows)",
-			"whereClause":  whereClause,
-		})
-		// #endregion
 		return map[string]interface{}{}
 	}
 
@@ -373,6 +331,10 @@ func ComputeResume(ctx context.Context, db bun.IDB, domain []interface{}, fuzzyS
 	for i, col := range cols {
 		result[col] = normalizeResumeValue(vals[i])
 	}
+
+	// Close the aggregate cursor before issuing another query on the same
+	// *sql.Conn (PostgreSQL: nested queries while Rows are open can break the connection).
+	_ = rows.Close()
 
 	result["total_docto_relacionados"] = getTotalDoctoRelacionados(ctx, db, domain, fuzzySearch, paymentsInDomain)
 	return result
@@ -420,55 +382,16 @@ func CFDIResume(ctx context.Context, db bun.IDB, domain []interface{}, fuzzySear
 		exercise = filtered
 	} else {
 		longSpan := longResumeWindowSkipsExerciseWiden(domain)
-		// #region agent log
-		starts := collectFechaFiltroLowerStarts(domain)
-		hi, hiOK := earliestFechaFiltroUpper(domain)
-		days := 0
-		if len(starts) > 0 && hiOK && hi.After(starts[0]) {
-			days = int(hi.Sub(starts[0]).Hours() / 24)
-		}
-		debugResumeNDJSON(map[string]interface{}{
-			"hypothesisId":      "H-longSpan",
-			"location":          "resume.go:CFDIResume",
-			"message":           "resume window evaluation",
-			"longSpanSkipWiden": longSpan,
-			"fechaLowerCount":   len(starts),
-			"fechaUpperOk":      hiOK,
-			"approxSpanDays":    days,
-			"resumeType":        resumeType,
-			"filteredCount":     filtered["count"],
-		})
-		// #endregion
 		if longSpan {
 			exercise = filtered
 		} else {
 			maxFecha, _ := queryMaxFechaFiltro(ctx, db, domain, fuzzySearch)
 			exerciseDomain := domainCopyForExercise(domain, maxFecha)
-			// #region agent log
-			exerciseDomainJSON, _ := json.Marshal(exerciseDomain)
-			debugResumeNDJSON(map[string]interface{}{
-				"hypothesisId":  "H-exerciseDomain",
-				"location":      "resume.go:CFDIResume",
-				"message":       "exercise domain built",
-				"exerciseDomain": string(exerciseDomainJSON),
-				"maxFechaValid": maxFecha.Valid,
-			})
-			// #endregion
 			exercise = ComputeResume(ctx, db, exerciseDomain, fuzzySearch, resumeType)
 			if len(exercise) == 0 {
 				exercise = filtered
 			}
 		}
-		// #region agent log
-		debugResumeNDJSON(map[string]interface{}{
-			"hypothesisId":  "H-outcome",
-			"location":      "resume.go:CFDIResume",
-			"message":       "resume counts after exercise branch",
-			"longSpanUsed":  longSpan,
-			"filteredCount": filtered["count"],
-			"exerciseCount": exercise["count"],
-		})
-		// #endregion
 	}
 	return map[string]interface{}{
 		"filtered":  filtered,
