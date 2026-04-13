@@ -89,12 +89,41 @@ func (h *VerifyQuery) Handle(ctx context.Context, raw json.RawMessage) error {
 		return h.retryOrTimeout(msg, logger)
 	}
 
+	elapsedVerifyMS := int64(0)
+	if !msg.SentDate.IsZero() {
+		elapsedVerifyMS = time.Since(msg.SentDate).Milliseconds()
+	}
+
 	logger.Warn("SAT verify result",
 		"estado", satQuery.QueryStatus,
 		"cfdi_qty", satQuery.CfdiQty,
 		"packages", len(satQuery.Packages),
 		"status_code", satQuery.StatusCode,
+		"mensaje", satQuery.Message,
+		"cod_estatus", satQuery.CodEstatus,
+		"elapsed_since_sent_ms", elapsedVerifyMS,
+		"download_type", msg.DownloadType,
+		"request_type", msg.RequestType,
 	)
+
+	if satQuery.QueryStatus == sat.VerifyStatusError ||
+		satQuery.QueryStatus == sat.VerifyStatusRejected ||
+		satQuery.QueryStatus == sat.VerifyStatusExpired {
+		// #region agent log
+		agentDebugLog("H1", "verify_query.go:Handle", "verify terminal error-class status", map[string]any{
+			"estado_solicitud":        int(satQuery.QueryStatus),
+			"codigo_estado_solicitud": satQuery.StatusCode,
+			"cfdi_qty":                satQuery.CfdiQty,
+			"packages_n":              len(satQuery.Packages),
+			"mensaje":                 satQuery.Message,
+			"cod_estatus":             satQuery.CodEstatus,
+			"elapsed_since_sent_ms":   elapsedVerifyMS,
+			"request_type":            msg.RequestType,
+			"download_type":           msg.DownloadType,
+			"sat_id":                  msg.Name,
+		})
+		// #endregion
+	}
 
 	// 3. Route by EstadoSolicitud.
 	switch {
@@ -172,7 +201,43 @@ func (h *VerifyQuery) handleError(ctx context.Context, msg VerifyQueryMsg, sq *s
 		return h.updateQueryState(ctx, msg, tenant.QueryStateInformationNotFound, 0, nil)
 
 	case sq.StatusCode == verifyStatusCodeMaxLimit:
-		logger.Warn("error too big")
+		// SAT uses 5002 both for "volume too large" and for some reject/throttle cases.
+		// When NumeroCFDIs is zero, treat as internal/throttle — not ERROR_TOO_BIG (no split).
+		resolvedState := tenant.QueryStateErrorTooBig
+		if sq.CfdiQty == 0 {
+			resolvedState = tenant.QueryStateErrorSATWSInternal
+		}
+		// #region agent log
+		agentDebugLog("H1", "verify_query.go:handleError:5002", "codigo 5002 resolution", map[string]any{
+			"cfdi_qty":       sq.CfdiQty,
+			"resolved_state": resolvedState,
+			"mensaje":        sq.Message,
+			"cod_estatus":    sq.CodEstatus,
+			"query_status":   int(sq.QueryStatus),
+			"request_type":   msg.RequestType,
+			"download_type":  msg.DownloadType,
+		})
+		// #endregion
+
+		if sq.CfdiQty == 0 {
+			logger.Warn("SAT 5002 with zero CFDIs — storing ERROR_SAT_WS_INTERNAL (not ERROR_TOO_BIG)",
+				"mensaje", sq.Message,
+				"cod_estatus", sq.CodEstatus,
+				"request_type", msg.RequestType,
+			)
+			return h.updateQueryState(ctx, msg, tenant.QueryStateErrorSATWSInternal, 0, nil)
+		}
+
+		logger.Warn("SAT 5002 with non-zero CFDIs — ERROR_TOO_BIG (split path for metadata)",
+			"cfdi_qty", sq.CfdiQty,
+			"mensaje", sq.Message,
+			"request_type", msg.RequestType,
+		)
+		// #region agent log
+		agentDebugLog("H2", "verify_query.go:handleError:5002", "volume split path", map[string]any{
+			"cfdi_qty": sq.CfdiQty, "request_type": msg.RequestType,
+		})
+		// #endregion
 		state := tenant.QueryStateErrorTooBig
 		if err := h.updateQueryState(ctx, msg, state, 0, nil); err != nil {
 			return err
