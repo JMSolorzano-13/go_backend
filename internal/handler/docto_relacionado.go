@@ -61,6 +61,7 @@ func (h *DoctoRelacionado) Search(w http.ResponseWriter, r *http.Request) {
 		response.InternalError(w, fmt.Sprintf("search: %v", err))
 		return
 	}
+	enrichDoctoRelacionadoNested(ctx, conn, cid, result)
 	response.WriteJSON(w, http.StatusOK, result)
 }
 

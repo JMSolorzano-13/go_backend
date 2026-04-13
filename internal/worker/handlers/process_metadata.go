@@ -19,18 +19,18 @@ import (
 
 // metadataRecord is a parsed metadata row from the SAT TXT file.
 type metadataRecord struct {
-	UUID                   string
-	RfcEmisor              string
-	NombreEmisor           string
-	RfcReceptor            string
-	NombreReceptor         string
-	RfcPac                 string
-	FechaEmision           string
-	FechaCertificacionSat  string
-	Monto                  string
-	EfectoComprobante      string // First letter → TipoDeComprobante
-	Estatus                string // "Vigente" | "Cancelado"
-	FechaCancelacion       string
+	UUID                  string
+	RfcEmisor             string
+	NombreEmisor          string
+	RfcReceptor           string
+	NombreReceptor        string
+	RfcPac                string
+	FechaEmision          string
+	FechaCertificacionSat string
+	Monto                 string
+	EfectoComprobante     string // First letter → TipoDeComprobante
+	Estatus               string // "Vigente" | "Cancelado"
+	FechaCancelacion      string
 }
 
 // metadataTXTFieldCount is the expected number of fields per TXT row.
@@ -341,14 +341,14 @@ func (h *ProcessMetadata) upsertMetadataRecords(ctx context.Context, conn bun.Co
 // cancelRelated marks related DoctoRelacionado, Payment, and CfdiRelacionado
 // rows as Estatus=false when the parent CFDI is cancelled.
 func (h *ProcessMetadata) cancelRelated(ctx context.Context, conn bun.Conn, uuids []string) {
-	// docto_relacionado — has UUID column
+	// payment_relation (DoctoRelacionado) — UUID is the payment CFDI
 	if _, err := conn.NewUpdate().
-		TableExpr("docto_relacionado").
+		TableExpr("payment_relation").
 		Set(`"Estatus" = false`).
 		Where(`"UUID" IN (?)`, bun.In(uuids)).
 		Where(`"Estatus" = true`).
 		Exec(ctx); err != nil {
-		slog.Error("cancel docto_relacionado failed", "error", err)
+		slog.Error("cancel payment_relation failed", "error", err)
 	}
 
 	// payment — has uuid_origin column

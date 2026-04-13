@@ -386,3 +386,86 @@ func parsePagosComplemento(xmlContent string) ([]pagoParsed, error) {
 	}
 	return result, nil
 }
+
+// pagosTotalesAttrs mirrors Python parsers._get_totales_attribute keys on Pagos 2.0 Totales.
+type pagosTotalesAttrs struct {
+	MontoTotalPagos             string `xml:"MontoTotalPagos,attr"`
+	TotalTrasladosImpuestoIVA0  string `xml:"TotalTrasladosImpuestoIVA0,attr"`
+	TotalTrasladosImpuestoIVA8  string `xml:"TotalTrasladosImpuestoIVA8,attr"`
+	TotalTrasladosImpuestoIVA16 string `xml:"TotalTrasladosImpuestoIVA16,attr"`
+	TotalTrasladosBaseIVA16     string `xml:"TotalTrasladosBaseIVA16,attr"`
+	TotalTrasladosBaseIVA8      string `xml:"TotalTrasladosBaseIVA8,attr"`
+	TotalTrasladosBaseIVA0      string `xml:"TotalTrasladosBaseIVA0,attr"`
+	TotalTrasladosBaseIVAExento string `xml:"TotalTrasladosBaseIVAExento,attr"`
+	TotalRetencionesIVA         string `xml:"TotalRetencionesIVA,attr"`
+	TotalRetencionesIEPS        string `xml:"TotalRetencionesIEPS,attr"`
+	TotalRetencionesISR         string `xml:"TotalRetencionesISR,attr"`
+}
+
+type pagosComplementHeaderXML struct {
+	Pago []struct {
+		FechaPago   string `xml:"FechaPago,attr"`
+		MonedaP     string `xml:"MonedaP,attr"`
+		TipoCambioP string `xml:"TipoCambioP,attr"`
+	} `xml:"Pago"`
+	Totales *pagosTotalesAttrs `xml:"Totales"`
+}
+
+type pagosComplementRoot struct {
+	XMLName     xml.Name `xml:"Comprobante"`
+	Complemento struct {
+		Pagos *pagosComplementHeaderXML `xml:"Pagos"`
+	} `xml:"Complemento"`
+}
+
+// applyPagosComplementToCFDIData fills CFDI tax/total/date fields from the Pagos complement
+// (Python parsers._compute_impuestos_pago + _set_fecha_filtro for Pagos).
+// Returns true if at least FechaPago from the complement was applied (filter date alignment).
+func applyPagosComplementToCFDIData(data *cfdiXMLData, xmlContent string) bool {
+	if data == nil || data.TipoDeComprobante != "P" {
+		return false
+	}
+
+	var root pagosComplementRoot
+	if err := xml.Unmarshal([]byte(xmlContent), &root); err != nil {
+		return false
+	}
+	pagos := root.Complemento.Pagos
+	if pagos == nil || len(pagos.Pago) == 0 {
+		return false
+	}
+
+	first := pagos.Pago[0]
+	fp := parseDatetime(strings.TrimSpace(first.FechaPago))
+	if fp.IsZero() {
+		return false
+	}
+	data.PagosFechaFiltro = fp
+	data.PagosComplementApplied = true
+
+	if mon := strings.TrimSpace(first.MonedaP); mon != "" {
+		data.Moneda = mon
+	}
+	if tc := parseFloatStr(first.TipoCambioP); tc > 0 {
+		data.TipoCambio = tc
+	}
+
+	if t := pagos.Totales; t != nil {
+		iva0 := parseFloatStr(t.TotalTrasladosImpuestoIVA0)
+		iva8 := parseFloatStr(t.TotalTrasladosImpuestoIVA8)
+		iva16 := parseFloatStr(t.TotalTrasladosImpuestoIVA16)
+		data.TrasladosIVA = iva0 + iva8 + iva16
+		data.IVATrasladado8 = iva8
+		data.IVATrasladado16 = iva16
+		data.BaseIVA16 = parseFloatStr(t.TotalTrasladosBaseIVA16)
+		data.BaseIVA8 = parseFloatStr(t.TotalTrasladosBaseIVA8)
+		data.BaseIVA0 = parseFloatStr(t.TotalTrasladosBaseIVA0)
+		data.BaseIVAExento = parseFloatStr(t.TotalTrasladosBaseIVAExento)
+		data.RetencionesIVA = parseFloatStr(t.TotalRetencionesIVA)
+		data.RetencionesIEPS = parseFloatStr(t.TotalRetencionesIEPS)
+		data.RetencionesISR = parseFloatStr(t.TotalRetencionesISR)
+		data.Total = parseFloatStr(t.MontoTotalPagos)
+	}
+
+	return true
+}

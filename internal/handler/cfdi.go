@@ -67,7 +67,7 @@ func (h *CFDI) readBody(r *http.Request) (map[string]interface{}, []byte, error)
 
 // 1. POST /api/CFDI/search
 func (h *CFDI) Search(w http.ResponseWriter, r *http.Request) {
-	conn, _, err := h.tenantConn(r, true)
+	conn, cid, err := h.tenantConn(r, true)
 	if err != nil {
 		response.InternalError(w, fmt.Sprintf("tenant session: %v", err))
 		return
@@ -91,6 +91,7 @@ func (h *CFDI) Search(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	enrichCFDIsWithPolizas(r.Context(), conn, result)
+	enrichCFDIsWithPagosData(r.Context(), conn, cid, result, params)
 	response.WriteJSON(w, http.StatusOK, result)
 }
 

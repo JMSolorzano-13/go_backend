@@ -152,6 +152,12 @@ func (h *ProcessXML) processPackageXMLs(ctx context.Context, conn bun.Conn, pack
 
 		xmlContent = stripXMLDecl(xmlContent)
 
+		if cfdiData.TipoDeComprobante == "P" {
+			if applyPagosComplementToCFDIData(cfdiData, xmlContent) {
+				recomputeCFDIDataMXN(cfdiData)
+			}
+		}
+
 		if err := h.upsertFromXML(ctx, conn, cfdiData, companyID, xmlContent, now); err != nil {
 			logger.Error("upsert from XML failed", "uuid", cfdiData.UUID, "error", err)
 			continue
@@ -238,9 +244,9 @@ type cfdiXMLData struct {
 	RetencionesISRMXN  float64
 
 	// Boolean classification flags (mirrors Python parsers.add_validations)
-	IsIPUE              bool
-	IsIPPD              bool
-	IsEPPD              bool
+	IsIPUE                bool
+	IsIPPD                bool
+	IsEPPD                bool
 	IsENoCfdiRelacionados bool
 
 	// JSON serializations (xmltodict-compatible for Python interop)
@@ -249,6 +255,10 @@ type cfdiXMLData struct {
 
 	IsIssued         bool
 	CfdiRelacionados string
+
+	// Pagos complement (tipo P): FechaFiltro/PaymentDate use first Pago/@FechaPago (Python _set_fecha_filtro).
+	PagosFechaFiltro       time.Time
+	PagosComplementApplied bool
 }
 
 // parseCFDIXML extracts all CFDI fields from an XML string.
@@ -588,7 +598,23 @@ func parseCFDIXML(xmlContent, companyRFC string) (*cfdiXMLData, error) {
 		data.CfdiRelacionados = string(relJSON)
 	}
 
-	// Compute MXN currency-converted fields (mirrors Python compute_mxn_fields).
+	recomputeCFDIDataMXN(data)
+
+	// Compute boolean classification flags (mirrors Python parsers.add_validations).
+	// TipoDeComprobante_I_MetodoPago_PUE: Ingreso + PUE payment method + 99 FormaPago.
+	data.IsIPUE = comp.TipoDeComprobante == "I" && comp.MetodoPago == "PUE" && comp.FormaPago == "99"
+	data.IsIPPD = false // Python hardcodes false
+	data.IsEPPD = false // Python hardcodes false
+	data.IsENoCfdiRelacionados = comp.TipoDeComprobante == "E" && len(comp.CfdiRelacionados) == 0
+
+	return data, nil
+}
+
+// recomputeCFDIDataMXN mirrors Python compute_mxn_fields (value × TipoCambio, default 1).
+func recomputeCFDIDataMXN(data *cfdiXMLData) {
+	if data == nil {
+		return
+	}
 	tc := data.TipoCambio
 	if tc <= 0 {
 		tc = 1
@@ -603,15 +629,17 @@ func parseCFDIXML(xmlContent, companyRFC string) (*cfdiXMLData, error) {
 	data.RetencionesIVAMXN = roundFloat6(data.RetencionesIVA * tc)
 	data.RetencionesIEPSMXN = roundFloat6(data.RetencionesIEPS * tc)
 	data.RetencionesISRMXN = roundFloat6(data.RetencionesISR * tc)
+}
 
-	// Compute boolean classification flags (mirrors Python parsers.add_validations).
-	// TipoDeComprobante_I_MetodoPago_PUE: Ingreso + PUE payment method + 99 FormaPago.
-	data.IsIPUE = comp.TipoDeComprobante == "I" && comp.MetodoPago == "PUE" && comp.FormaPago == "99"
-	data.IsIPPD = false // Python hardcodes false
-	data.IsEPPD = false // Python hardcodes false
-	data.IsENoCfdiRelacionados = comp.TipoDeComprobante == "E" && len(comp.CfdiRelacionados) == 0
-
-	return data, nil
+// cfdiFechaFiltroForXML returns FechaFiltro/PaymentDate for persistence (Pagos use complement FechaPago).
+func cfdiFechaFiltroForXML(data *cfdiXMLData) time.Time {
+	if data != nil && data.PagosComplementApplied && !data.PagosFechaFiltro.IsZero() {
+		return data.PagosFechaFiltro
+	}
+	if data != nil {
+		return data.Fecha
+	}
+	return time.Time{}
 }
 
 // upsertFromXML updates an existing CFDI row with data parsed from the XML,
@@ -685,6 +713,12 @@ func (h *ProcessXML) upsertFromXML(ctx context.Context, conn bun.Conn, data *cfd
 		q = q.Set(`"RfcPac" = ?`, data.RfcPac)
 	}
 
+	q = q.Set(`"Total" = ?`, data.Total)
+	if data.PagosComplementApplied {
+		ff := cfdiFechaFiltroForXML(data)
+		q = q.Set(`"FechaFiltro" = ?`, ff).Set(`"PaymentDate" = ?`, ff)
+	}
+
 	res, err := q.Exec(ctx)
 	if err != nil {
 		return fmt.Errorf("update CFDI from XML: %w", err)
@@ -697,46 +731,47 @@ func (h *ProcessXML) upsertFromXML(ctx context.Context, conn bun.Conn, data *cfd
 		if fechaCert.IsZero() {
 			fechaCert = data.Fecha
 		}
+		ffIns := cfdiFechaFiltroForXML(data)
 		cfdi := &tenant.CFDI{
-			CompanyIdentifier:     companyID,
-			IsIssued:              data.IsIssued,
-			UUID:                  data.UUID,
-			Fecha:                 data.Fecha,
-			Total:                 data.Total,
-			TipoDeComprobante:     data.TipoDeComprobante,
-			RfcEmisor:             data.RfcEmisor,
-			NombreEmisor:          &data.NombreEmisor,
-			RfcReceptor:           data.RfcReceptor,
-			NombreReceptor:        &data.NombreReceptor,
-			RfcPac:                nilIfEmpty(data.RfcPac),
-			FechaCertificacionSat: fechaCert,
-			Estatus:               true,
-			FechaFiltro:           data.Fecha,
-			PaymentDate:           data.Fecha,
-			Active:                true,
-			FromXML:               true,
-			NoCertificadoSAT:      nilIfEmpty(data.NoCertificadoSAT),
-			SelloSAT:              nilIfEmpty(data.SelloSAT),
-			CondicionesDePago:     nilIfEmpty(data.CondicionesDePago),
-			Conceptos:             nilIfEmpty(data.ConceptosJSON),
-			Impuestos:             nilIfEmpty(data.ImpuestosJSON),
-			TotalMXN:              nilIfZero(data.TotalMXN),
-			SubTotalMXN:           nilIfZero(data.SubTotalMXN),
-			NetoMXN:               nilIfZero(data.NetoMXN),
-			DescuentoMXN:          nilIfZero(data.DescuentoMXN),
-			TrasladosIVAMXN:       nilIfZero(data.TrasladosIVAMXN),
-			TrasladosIEPSMXN:      nilIfZero(data.TrasladosIEPSMXN),
-			TrasladosISRMXN:       nilIfZero(data.TrasladosISRMXN),
-			RetencionesIVAMXN:     nilIfZero(data.RetencionesIVAMXN),
-			RetencionesIEPSMXN:    nilIfZero(data.RetencionesIEPSMXN),
-			RetencionesISRMXN:     nilIfZero(data.RetencionesISRMXN),
+			CompanyIdentifier:                      companyID,
+			IsIssued:                               data.IsIssued,
+			UUID:                                   data.UUID,
+			Fecha:                                  data.Fecha,
+			Total:                                  data.Total,
+			TipoDeComprobante:                      data.TipoDeComprobante,
+			RfcEmisor:                              data.RfcEmisor,
+			NombreEmisor:                           &data.NombreEmisor,
+			RfcReceptor:                            data.RfcReceptor,
+			NombreReceptor:                         &data.NombreReceptor,
+			RfcPac:                                 nilIfEmpty(data.RfcPac),
+			FechaCertificacionSat:                  fechaCert,
+			Estatus:                                true,
+			FechaFiltro:                            ffIns,
+			PaymentDate:                            ffIns,
+			Active:                                 true,
+			FromXML:                                true,
+			NoCertificadoSAT:                       nilIfEmpty(data.NoCertificadoSAT),
+			SelloSAT:                               nilIfEmpty(data.SelloSAT),
+			CondicionesDePago:                      nilIfEmpty(data.CondicionesDePago),
+			Conceptos:                              nilIfEmpty(data.ConceptosJSON),
+			Impuestos:                              nilIfEmpty(data.ImpuestosJSON),
+			TotalMXN:                               nilIfZero(data.TotalMXN),
+			SubTotalMXN:                            nilIfZero(data.SubTotalMXN),
+			NetoMXN:                                nilIfZero(data.NetoMXN),
+			DescuentoMXN:                           nilIfZero(data.DescuentoMXN),
+			TrasladosIVAMXN:                        nilIfZero(data.TrasladosIVAMXN),
+			TrasladosIEPSMXN:                       nilIfZero(data.TrasladosIEPSMXN),
+			TrasladosISRMXN:                        nilIfZero(data.TrasladosISRMXN),
+			RetencionesIVAMXN:                      nilIfZero(data.RetencionesIVAMXN),
+			RetencionesIEPSMXN:                     nilIfZero(data.RetencionesIEPSMXN),
+			RetencionesISRMXN:                      nilIfZero(data.RetencionesISRMXN),
 			TipoDeComprobanteIMetodoPagoPUE:        data.IsIPUE,
 			TipoDeComprobanteIMetodoPagoPPD:        data.IsIPPD,
 			TipoDeComprobanteEMetodoPagoPPD:        data.IsEPPD,
 			TipoDeComprobanteECfdiRelacionadosNone: data.IsENoCfdiRelacionados,
-			CreatedAt:             now,
-			UpdatedAt:             now,
-			XMLContent:            &xmlContent,
+			CreatedAt:                              now,
+			UpdatedAt:                              now,
+			XMLContent:                             &xmlContent,
 		}
 
 		if _, err := conn.NewInsert().
