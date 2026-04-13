@@ -61,9 +61,13 @@ func soapConsume(soapAction, uri, body string, token string, timeout time.Durati
 // Matches Python utils.check_response.
 func checkResponse(resp *SOAPResponse) error {
 	if resp.StatusCode != http.StatusOK {
+		reason := http.StatusText(resp.StatusCode)
+		if resp.StatusCode == http.StatusMovedPermanently {
+			reason = "HTTP 301 Moved Permanently — SAT often uses this for invalid SolicitaDescarga parameters (e.g. end date after Mexico today); not necessarily literal XML parse failure"
+		}
 		return &RequestError{
 			StatusCode: resp.StatusCode,
-			Reason:     http.StatusText(resp.StatusCode),
+			Reason:     reason,
 		}
 	}
 	return nil

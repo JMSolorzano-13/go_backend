@@ -36,7 +36,9 @@ func (h *SendQueryMetadata) Handle(ctx context.Context, raw json.RawMessage) err
 	)
 
 	start := datetime.LastXFiscalYearsStart(5)
-	end := time.Now().In(datetime.MexicoCity())
+	// Match company bootstrap: half-open upper bound is start of day after Mexico "today"
+	// (not wall-clock Now — avoids inconsistent SOAP timestamps vs admin/sat-enqueue).
+	end := datetime.MXCalendarDate(time.Now().In(datetime.MexicoCity())).AddDate(0, 0, 1)
 
 	scheduleBase := time.Now()
 	sqsIssued := event.NewSQSBase()

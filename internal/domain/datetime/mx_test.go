@@ -27,6 +27,9 @@ func TestLastXFiscalYearsStart_UsesMexicoYear(t *testing.T) {
 	if got.Year() != y-5 || got.Month() != time.January || got.Day() != 1 {
 		t.Fatalf("unexpected LastXFiscalYearsStart(5): %v (mx year %d)", got, y)
 	}
+	if got.Location().String() != MexicoCity().String() {
+		t.Fatalf("want America/Mexico_City location, got %v", got.Location())
+	}
 }
 
 func TestADDDefaultSyncWindow_EndIsStartOfMonthOrAfter(t *testing.T) {

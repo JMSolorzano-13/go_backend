@@ -19,10 +19,12 @@ func MXCalendarDate(t time.Time) time.Time {
 	return time.Date(y, m, d, 0, 0, 0, 0, time.UTC)
 }
 
-// LastXFiscalYearsStart matches Python last_X_fiscal_years: Jan 1 of (current MX calendar year − years).
+// LastXFiscalYearsStart matches Python last_X_fiscal_years (query_creator.last_X_fiscal_years):
+// Jan 1 00:00 in America/Mexico_City for (current MX calendar year − years), not UTC midnight.
+// Using UTC here shifted the window vs Python/SAT Centro and contributed to SolicitaDescarga failures.
 func LastXFiscalYearsStart(years int) time.Time {
 	n := time.Now().In(MexicoCity())
-	return time.Date(n.Year()-years, time.January, 1, 0, 0, 0, 0, time.UTC)
+	return time.Date(n.Year()-years, time.January, 1, 0, 0, 0, 0, MexicoCity())
 }
 
 // ADDDefaultSyncWindow matches ADDSyncRequester.add_time_window_to_sync (Mexico “today”),

@@ -7,6 +7,18 @@ import (
 	"time"
 )
 
+// soapFechaCentro formats FechaInicial/FechaFinal for SAT Descarga Masiva (Centro).
+// Stored times use UTC-midnight calendar labels (or Mexico-local instants from bootstrap);
+// SAT expects the same calendar Y-M-D at 00:00:00 in America/Mexico_City.
+func soapFechaCentro(t time.Time) string {
+	loc, err := time.LoadLocation("America/Mexico_City")
+	if err != nil {
+		loc = time.UTC
+	}
+	y, m, d := t.UTC().Date()
+	return time.Date(y, m, d, 0, 0, 0, 0, loc).Format("2006-01-02T15:04:05")
+}
+
 // DefaultTimeWindow is the default query window when no start date is given (30 days).
 const DefaultTimeWindow = 30 * 24 * time.Hour
 
@@ -153,8 +165,8 @@ func (q *Query) buildSendEnvelope(c *Connector) (string, error) {
 // Matches Python Query.soap_send.
 func (q *Query) soapSendData() map[string]string {
 	data := map[string]string{
-		"start":         q.Start.Format("2006-01-02T15:04:05"),
-		"end":           q.End.Format("2006-01-02T15:04:05"),
+		"start":         soapFechaCentro(q.Start),
+		"end":           soapFechaCentro(q.End),
 		"download_type": string(q.DownloadType),
 		"request_type":  string(q.RequestType),
 		"signature":     "{signature}",

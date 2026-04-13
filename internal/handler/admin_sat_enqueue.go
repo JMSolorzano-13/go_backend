@@ -61,7 +61,7 @@ func (h *AdminSATEnqueue) Enqueue(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	startUTC, endUTC, err := datetime.AdminEnqueueCalendarRange(req.Start, req.End)
+	startUTC, endUTC, endEffective, endClamped, err := datetime.AdminEnqueueCalendarRangeClamped(req.Start, req.End, time.Now())
 	if err != nil {
 		response.BadRequest(w, err.Error())
 		return
@@ -120,14 +120,16 @@ func (h *AdminSATEnqueue) Enqueue(w http.ResponseWriter, r *http.Request) {
 		"published": published,
 		"chunks":    len(chunks),
 		"details": map[string]interface{}{
-			"company_identifier":     req.CompanyIdentifier,
-			"request_type":           reqType,
-			"download_types":         dlTypes,
-			"start":                  req.Start,
-			"end":                    req.End,
-			"chunk_days":             chunkDays,
-			"execute_at_spacing_sec": int(event.SatSolicitudEnqueueSpacing / time.Second),
-			"scheduled_messages":     published,
+			"company_identifier":          req.CompanyIdentifier,
+			"request_type":                reqType,
+			"download_types":              dlTypes,
+			"start":                       req.Start,
+			"end":                         req.End,
+			"end_inclusive_effective":     endEffective,
+			"end_clamped_to_mexico_today": endClamped,
+			"chunk_days":                  chunkDays,
+			"execute_at_spacing_sec":      int(event.SatSolicitudEnqueueSpacing / time.Second),
+			"scheduled_messages":          published,
 		},
 	})
 }
