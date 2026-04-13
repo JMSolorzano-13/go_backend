@@ -61,21 +61,9 @@ func (h *AdminSATEnqueue) Enqueue(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	start, err := time.Parse("2006-01-02", req.Start)
+	startUTC, endUTC, err := datetime.AdminEnqueueCalendarRange(req.Start, req.End)
 	if err != nil {
-		response.BadRequest(w, fmt.Sprintf("invalid start date: %v", err))
-		return
-	}
-	end, err := time.Parse("2006-01-02", req.End)
-	if err != nil {
-		response.BadRequest(w, fmt.Sprintf("invalid end date: %v", err))
-		return
-	}
-	startUTC := start.UTC()
-	endUTC := end.AddDate(0, 0, 1).UTC()
-
-	if !startUTC.Before(endUTC) {
-		response.BadRequest(w, "start must be before end")
+		response.BadRequest(w, err.Error())
 		return
 	}
 
@@ -102,12 +90,18 @@ func (h *AdminSATEnqueue) Enqueue(w http.ResponseWriter, r *http.Request) {
 
 	chunks := datetime.ChunkRangeByDays(startUTC, endUTC, chunkDays)
 	published := 0
+	scheduleBase := time.Now().UTC()
+	slot := 0
 	for _, c := range chunks {
 		for _, dl := range dlTypes {
 			cs := c.Start
 			ce := c.End
+			sqs := event.NewSQSBase()
+			tExec := scheduleBase.Add(time.Duration(slot) * event.SatSolicitudEnqueueSpacing)
+			slot++
+			sqs.ExecuteAt = &tExec
 			h.bus.Publish(event.EventTypeSATWSRequestCreateQuery, event.QueryCreateEvent{
-				SQSBase:           event.NewSQSBase(),
+				SQSBase:           sqs,
 				CompanyIdentifier: req.CompanyIdentifier,
 				DownloadType:      dl,
 				RequestType:       reqType,
@@ -126,12 +120,14 @@ func (h *AdminSATEnqueue) Enqueue(w http.ResponseWriter, r *http.Request) {
 		"published": published,
 		"chunks":    len(chunks),
 		"details": map[string]interface{}{
-			"company_identifier": req.CompanyIdentifier,
-			"request_type":       reqType,
-			"download_types":     dlTypes,
-			"start":              req.Start,
-			"end":                req.End,
-			"chunk_days":         chunkDays,
+			"company_identifier":     req.CompanyIdentifier,
+			"request_type":           reqType,
+			"download_types":         dlTypes,
+			"start":                  req.Start,
+			"end":                    req.End,
+			"chunk_days":             chunkDays,
+			"execute_at_spacing_sec": int(event.SatSolicitudEnqueueSpacing / time.Second),
+			"scheduled_messages":     published,
 		},
 	})
 }
