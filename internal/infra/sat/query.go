@@ -3,6 +3,7 @@ package sat
 import (
 	"fmt"
 	"log/slog"
+	"strings"
 	"time"
 )
 
@@ -194,8 +195,13 @@ func (q *Query) processSendResponse(resp *SOAPResponse) error {
 		return err
 	}
 
+	id := strings.TrimSpace(parsed.IdSolicitud)
+	if id == "" {
+		return fmt.Errorf("sat solicitud returned empty IdSolicitud (likely throttling or rejection; cod_estatus=%q)", parsed.CodEstatus)
+	}
+
 	q.CodEstatus = parsed.CodEstatus
-	q.Identifier = parsed.IdSolicitud
+	q.Identifier = id
 	q.SentDate = time.Now()
 
 	slog.Info("sat: solicitud sent",

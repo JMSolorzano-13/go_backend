@@ -77,10 +77,19 @@ func TestOnCompanyCreateAutoSync_LocalInfra_PublishesMetadataAndCompleteCFDIs(t 
 	if !ok || meta.CompanyIdentifier != "00000000-0000-0000-0000-000000000001" || meta.CompanyRFC != "XAXX010101000" || meta.WID != 42 || meta.CID != 7 {
 		t.Fatalf("metadata payload: %+v", rec.payloads[0])
 	}
+	if meta.ExecuteAt == nil || !meta.ExecuteAt.Equal(fixedNow) {
+		t.Fatalf("metadata ExecuteAt: got %v want %v", meta.ExecuteAt, fixedNow)
+	}
 
-	q1 := rec.payloads[1].(QueryCreateEvent)
-	if q1.CompanyIdentifier != "00000000-0000-0000-0000-000000000001" || q1.WID != 42 || q1.CID != 7 {
-		t.Fatalf("first create-query: %+v", q1)
+	for i := 1; i <= nCreate; i++ {
+		q := rec.payloads[i].(QueryCreateEvent)
+		if q.CompanyIdentifier != "00000000-0000-0000-0000-000000000001" || q.WID != 42 || q.CID != 7 {
+			t.Fatalf("create-query[%d]: %+v", i, q)
+		}
+		want := fixedNow.Add(time.Duration(i) * SatSolicitudEnqueueSpacing)
+		if q.ExecuteAt == nil || !q.ExecuteAt.Equal(want) {
+			t.Fatalf("create-query[%d] ExecuteAt: got %v want %v", i, q.ExecuteAt, want)
+		}
 	}
 
 	completeIssued := rec.payloads[1+nCreate].(NeedToCompleteCFDIsEvent)

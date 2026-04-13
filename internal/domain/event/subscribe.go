@@ -42,6 +42,17 @@ type CompanyCreatedEvent struct {
 // initialCompanyCFDIChunkDays matches POST /api/admin/sat-enqueue default for CFDI requests.
 const initialCompanyCFDIChunkDays = 90
 
+// SatSolicitudEnqueueSpacing is the spacing between scheduled enqueue times for SAT
+// SolicitaDescarga-bound messages when bootstrapping a company. SAT applies aggressive
+// per-RFC limits on concurrent solicitudes; bursts surface as empty IdSolicitud or
+// spurious verify errors. See send_query_metadata for METADATA follow-up publishes.
+const SatSolicitudEnqueueSpacing = 3 * time.Second
+
+func executeAtForAutosyncSlot(base time.Time, slot int) *time.Time {
+	t := base.Add(time.Duration(slot) * SatSolicitudEnqueueSpacing)
+	return &t
+}
+
 type OnCompanyCreateAutoSync struct {
 	Bus *Bus
 	Cfg *config.Config
@@ -65,12 +76,17 @@ func (h *OnCompanyCreateAutoSync) Handle(ev DomainEvent) error {
 
 	start := datetime.LastXFiscalYearsStart(5)
 
-	h.Bus.Publish(EventTypeSATMetadataRequested, SQSCompanySendMetadata{
+	base := h.now()
+	slot := 0
+	meta := SQSCompanySendMetadata{
 		CompanyBase:       NewCompanyBase(company.CompanyIdentifier, company.CompanyRFC),
 		ManuallyTriggered: true,
 		WID:               company.WorkspaceID,
 		CID:               company.CompanyID,
-	})
+	}
+	meta.ExecuteAt = executeAtForAutosyncSlot(base, slot)
+	slot++
+	h.Bus.Publish(EventTypeSATMetadataRequested, meta)
 
 	endExclusive := datetime.MXCalendarDate(h.now().In(datetime.MexicoCity())).AddDate(0, 0, 1)
 	chunks := datetime.ChunkRangeByDays(start, endExclusive, initialCompanyCFDIChunkDays)
@@ -79,11 +95,13 @@ func (h *OnCompanyCreateAutoSync) Handle(ev DomainEvent) error {
 		"cfdi_chunk_windows", len(chunks),
 		"range_start", start.Format(time.RFC3339),
 		"range_end_exclusive", endExclusive.Format(time.RFC3339),
+		"sat_enqueue_spacing_sec", int(SatSolicitudEnqueueSpacing/time.Second),
+		"sat_scheduled_messages", 1+len(chunks)*2,
 	)
 
 	for _, ch := range chunks {
 		cs, ce := ch.Start, ch.End
-		h.Bus.Publish(EventTypeSATWSRequestCreateQuery, QueryCreateEvent{
+		issued := QueryCreateEvent{
 			SQSBase:           NewSQSBase(),
 			CompanyIdentifier: company.CompanyIdentifier,
 			DownloadType:      tenant.DownloadTypeIssued,
@@ -93,8 +111,12 @@ func (h *OnCompanyCreateAutoSync) Handle(ev DomainEvent) error {
 			End:               &ce,
 			WID:               company.WorkspaceID,
 			CID:               company.CompanyID,
-		})
-		h.Bus.Publish(EventTypeSATWSRequestCreateQuery, QueryCreateEvent{
+		}
+		issued.ExecuteAt = executeAtForAutosyncSlot(base, slot)
+		slot++
+		h.Bus.Publish(EventTypeSATWSRequestCreateQuery, issued)
+
+		received := QueryCreateEvent{
 			SQSBase:           NewSQSBase(),
 			CompanyIdentifier: company.CompanyIdentifier,
 			DownloadType:      tenant.DownloadTypeReceived,
@@ -104,7 +126,10 @@ func (h *OnCompanyCreateAutoSync) Handle(ev DomainEvent) error {
 			End:               &ce,
 			WID:               company.WorkspaceID,
 			CID:               company.CompanyID,
-		})
+		}
+		received.ExecuteAt = executeAtForAutosyncSlot(base, slot)
+		slot++
+		h.Bus.Publish(EventTypeSATWSRequestCreateQuery, received)
 	}
 
 	h.Bus.Publish(EventTypeSATCompleteCFDIsNeeded, NeedToCompleteCFDIsEvent{

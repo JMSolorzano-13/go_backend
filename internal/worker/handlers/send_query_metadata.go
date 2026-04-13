@@ -38,8 +38,13 @@ func (h *SendQueryMetadata) Handle(ctx context.Context, raw json.RawMessage) err
 	start := datetime.LastXFiscalYearsStart(5)
 	end := time.Now().In(datetime.MexicoCity())
 
+	scheduleBase := time.Now()
+	sqsIssued := event.NewSQSBase()
+	tIssued := scheduleBase
+	sqsIssued.ExecuteAt = &tIssued
+
 	h.Bus.Publish(event.EventTypeSATWSRequestCreateQuery, event.QueryCreateEvent{
-		SQSBase:           event.NewSQSBase(),
+		SQSBase:           sqsIssued,
 		CompanyIdentifier: msg.CompanyIdentifier,
 		DownloadType:      tenant.DownloadTypeIssued,
 		RequestType:       tenant.RequestTypeMetadata,
@@ -50,8 +55,12 @@ func (h *SendQueryMetadata) Handle(ctx context.Context, raw json.RawMessage) err
 		CID:               msg.CID,
 	})
 
+	sqsReceived := event.NewSQSBase()
+	tReceived := scheduleBase.Add(event.SatSolicitudEnqueueSpacing)
+	sqsReceived.ExecuteAt = &tReceived
+
 	h.Bus.Publish(event.EventTypeSATWSRequestCreateQuery, event.QueryCreateEvent{
-		SQSBase:           event.NewSQSBase(),
+		SQSBase:           sqsReceived,
 		CompanyIdentifier: msg.CompanyIdentifier,
 		DownloadType:      tenant.DownloadTypeReceived,
 		RequestType:       tenant.RequestTypeMetadata,
