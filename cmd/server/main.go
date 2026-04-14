@@ -10,6 +10,8 @@ import (
 	"syscall"
 	"time"
 
+	_ "time/tzdata" // embed IANA zones for scratch/Alpine images without /usr/share/zoneinfo
+
 	"github.com/siigofiscal/go_backend/internal/config"
 	"github.com/siigofiscal/go_backend/internal/db"
 	"github.com/siigofiscal/go_backend/internal/domain/auth"

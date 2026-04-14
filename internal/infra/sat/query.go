@@ -8,8 +8,9 @@ import (
 )
 
 // soapFechaCentro formats FechaInicial/FechaFinal for SAT Descarga Masiva (Centro).
-// Stored times use UTC-midnight calendar labels (or Mexico-local instants from bootstrap);
-// SAT expects the same calendar Y-M-D at 00:00:00 in America/Mexico_City.
+// Stored times use UTC-midnight calendar labels (MXCalendarDate / admin range); use UTC
+// calendar components here so "2026-04-13Z" stays Apr 13 (In(Mexico).Date would be Apr 12).
+// SAT expects that Y-M-D at 00:00:00 in America/Mexico_City.
 func soapFechaCentro(t time.Time) string {
 	loc, err := time.LoadLocation("America/Mexico_City")
 	if err != nil {
@@ -164,9 +165,11 @@ func (q *Query) buildSendEnvelope(c *Connector) (string, error) {
 // soapSendData builds the template data for the send request.
 // Matches Python Query.soap_send.
 func (q *Query) soapSendData() map[string]string {
+	soapStart := soapFechaCentro(q.Start)
+	soapEnd := soapFechaCentro(q.End)
 	data := map[string]string{
-		"start":         soapFechaCentro(q.Start),
-		"end":           soapFechaCentro(q.End),
+		"start":         soapStart,
+		"end":           soapEnd,
 		"download_type": string(q.DownloadType),
 		"request_type":  string(q.RequestType),
 		"signature":     "{signature}",

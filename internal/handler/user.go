@@ -2,7 +2,9 @@ package handler
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -189,27 +191,19 @@ func (h *User) CreateUser(w http.ResponseWriter, r *http.Request) {
 		response.Forbidden(w, "User already exists")
 		return
 	}
+	if !errors.Is(err, sql.ErrNoRows) {
+		response.InternalError(w, "lookup user: "+err.Error())
+		return
+	}
 
-	var cognitoSub string
-	var passwordHash *string
-
-	if h.cfg.LocalInfra {
-		cognitoSub = "local-signup-" + strings.ReplaceAll(req.Email, "@", "-")
-	} else if h.cfg.CloudProvider == "azure" {
-		cognitoSub = uuid.New().String()
-		hash, hashErr := bcrypt.GenerateFromPassword([]byte(req.Password), bcrypt.DefaultCost)
-		if hashErr != nil {
+	cognitoSub, passwordHash, err := resolveCreateUserIdentity(ctx, h.cfg, h.idp, req.Email, req.Password)
+	if err != nil {
+		if h.cfg.CloudProvider == "azure" {
 			response.InternalError(w, "password hash failed")
 			return
 		}
-		hashStr := string(hash)
-		passwordHash = &hashStr
-	} else {
-		cognitoSub, err = h.idp.SignUp(ctx, req.Email, req.Password)
-		if err != nil {
-			response.Forbidden(w, err.Error())
-			return
-		}
+		response.Forbidden(w, err.Error())
+		return
 	}
 
 	user := &control.User{
@@ -767,6 +761,42 @@ func (h *User) exchangeCodeForTokens(code string) (map[string]interface{}, error
 	}
 
 	return result, nil
+}
+
+// signupIdentitySourceTag labels which branch resolveCreateUserIdentity takes (tests + diagnostics).
+func signupIdentitySourceTag(cfg *config.Config) string {
+	switch {
+	case cfg.CloudProvider == "azure":
+		return "azure_selfauth"
+	case cfg.LocalInfra:
+		return "local_infra_stub"
+	case strings.TrimSpace(cfg.AWSEndpointURL) != "":
+		return "localstack_signup_stub"
+	default:
+		return "cognito_signup"
+	}
+}
+
+// resolveCreateUserIdentity picks cognito_sub and optional password_hash for POST /api/User.
+// Order: azure (selfauth, bcrypt) > LOCAL_INFRA stub > LocalStack (custom AWS endpoint) stub > Cognito SignUp.
+func resolveCreateUserIdentity(ctx context.Context, cfg *config.Config, idp port.IdentityProvider, email, password string) (cognitoSub string, passwordHash *string, err error) {
+	switch {
+	case cfg.CloudProvider == "azure":
+		cognitoSub = uuid.New().String()
+		hash, hashErr := bcrypt.GenerateFromPassword([]byte(password), bcrypt.DefaultCost)
+		if hashErr != nil {
+			return "", nil, hashErr
+		}
+		s := string(hash)
+		return cognitoSub, &s, nil
+	case cfg.LocalInfra:
+		return "local-signup-" + strings.ReplaceAll(email, "@", "-"), nil, nil
+	case strings.TrimSpace(cfg.AWSEndpointURL) != "":
+		return "local-signup-" + strings.ReplaceAll(email, "@", "-"), nil, nil
+	default:
+		sub, signErr := idp.SignUp(ctx, email, password)
+		return sub, nil, signErr
+	}
 }
 
 func (h *User) createDefaultWorkspaceForUser(ctx context.Context, database *db.Database, user *control.User) {

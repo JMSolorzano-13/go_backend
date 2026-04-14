@@ -9,16 +9,15 @@ type SATDateChunk struct {
 }
 
 // ChunkRangeByDays splits [start, endExclusive) into consecutive windows of at most chunkDays
-// each using a fixed 24h step (matches admin SAT enqueue and legacy Python tooling).
+// calendar days each (AddDate), avoiding 24h steps that drift across historical Mexico DST transitions.
 func ChunkRangeByDays(start, endExclusive time.Time, chunkDays int) []SATDateChunk {
 	if chunkDays <= 0 || !start.Before(endExclusive) {
 		return nil
 	}
-	delta := time.Duration(chunkDays) * 24 * time.Hour
 	var out []SATDateChunk
 	cursor := start
 	for cursor.Before(endExclusive) {
-		ce := cursor.Add(delta)
+		ce := cursor.AddDate(0, 0, chunkDays)
 		if ce.After(endExclusive) {
 			ce = endExclusive
 		}
