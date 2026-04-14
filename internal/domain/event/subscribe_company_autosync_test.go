@@ -37,8 +37,10 @@ func TestOnCompanyCreateAutoSync_LocalInfra_PublishesMetadataAndCompleteCFDIs(t 
 	rec.subscribe(bus, EventTypeRequestScrap)
 
 	fixedNow := time.Date(2026, 6, 15, 12, 0, 0, 0, time.UTC)
-	start := datetime.LastXFiscalYearsStart(5)
-	endEx := datetime.MXCalendarDate(fixedNow.In(datetime.MexicoCity())).AddDate(0, 0, 1)
+	start, endEx, _, _, errBoot := datetime.CompanyBootstrapSATRangeUTC(fixedNow, 5)
+	if errBoot != nil {
+		t.Fatal(errBoot)
+	}
 	nWin := len(datetime.ChunkRangeByDays(start, endEx, initialCompanyCFDIChunkDays))
 	nCreate := nWin * 2
 
@@ -111,8 +113,10 @@ func TestOnCompanyCreateAutoSync_NonLocal_PublishesScrap(t *testing.T) {
 	rec.subscribe(bus, EventTypeRequestScrap)
 
 	fixedNow := time.Date(2026, 6, 15, 12, 0, 0, 0, time.UTC)
-	start := datetime.LastXFiscalYearsStart(5)
-	endEx := datetime.MXCalendarDate(fixedNow.In(datetime.MexicoCity())).AddDate(0, 0, 1)
+	start, endEx, _, _, errBoot := datetime.CompanyBootstrapSATRangeUTC(fixedNow, 5)
+	if errBoot != nil {
+		t.Fatal(errBoot)
+	}
 	nCreate := len(datetime.ChunkRangeByDays(start, endEx, initialCompanyCFDIChunkDays)) * 2
 
 	h := &OnCompanyCreateAutoSync{

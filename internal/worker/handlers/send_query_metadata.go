@@ -35,12 +35,14 @@ func (h *SendQueryMetadata) Handle(ctx context.Context, raw json.RawMessage) err
 		"manually_triggered", msg.ManuallyTriggered,
 	)
 
-	start := datetime.LastXFiscalYearsStart(5)
-	// Match company bootstrap: half-open upper bound is start of day after Mexico "today"
-	// (not wall-clock Now — avoids inconsistent SOAP timestamps vs admin/sat-enqueue).
-	end := datetime.MXCalendarDate(time.Now().In(datetime.MexicoCity())).AddDate(0, 0, 1)
+	now := time.Now()
+	start, endExclusive, _, _, err := datetime.CompanyBootstrapSATRangeUTC(now, 5)
+	if err != nil {
+		return fmt.Errorf("company bootstrap SAT range: %w", err)
+	}
+	end := endExclusive
 
-	scheduleBase := time.Now()
+	scheduleBase := now
 	sqsIssued := event.NewSQSBase()
 	tIssued := scheduleBase
 	sqsIssued.ExecuteAt = &tIssued

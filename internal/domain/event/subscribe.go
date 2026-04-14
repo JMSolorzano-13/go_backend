@@ -74,7 +74,10 @@ func (h *OnCompanyCreateAutoSync) Handle(ev DomainEvent) error {
 		return nil
 	}
 
-	start := datetime.LastXFiscalYearsStart(5)
+	start, endExclusive, endEff, endClamped, err := datetime.CompanyBootstrapSATRangeUTC(h.now(), 5)
+	if err != nil {
+		return err
+	}
 
 	base := h.now()
 	slot := 0
@@ -88,13 +91,14 @@ func (h *OnCompanyCreateAutoSync) Handle(ev DomainEvent) error {
 	slot++
 	h.Bus.Publish(EventTypeSATMetadataRequested, meta)
 
-	endExclusive := datetime.MXCalendarDate(h.now().In(datetime.MexicoCity())).AddDate(0, 0, 1)
 	chunks := datetime.ChunkRangeByDays(start, endExclusive, initialCompanyCFDIChunkDays)
 	slog.Warn("company_create_auto_sync",
 		"company_identifier", company.CompanyIdentifier,
 		"cfdi_chunk_windows", len(chunks),
 		"range_start", start.Format(time.RFC3339),
 		"range_end_exclusive", endExclusive.Format(time.RFC3339),
+		"bootstrap_end_inclusive_effective", endEff,
+		"bootstrap_end_clamped", endClamped,
 		"sat_enqueue_spacing_sec", int(SatSolicitudEnqueueSpacing/time.Second),
 		"sat_scheduled_messages", 1+len(chunks)*2,
 	)
